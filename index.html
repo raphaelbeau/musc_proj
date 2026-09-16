@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>Fonte — Suivi Sport &amp; Musculation</title>
+
+<!-- Polices : Oswald pour les titres (signalétique de salle de sport), Inter pour le texte courant,
+     IBM Plex Mono pour toutes les valeurs numériques (poids, reps, chronos) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+
+<!-- Tailwind CSS via CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          fonte: {
+            bg: '#1B222C',
+            panel: '#232B36',
+            panel2: '#2B3542',
+            border: '#37424F',
+            text: '#EDEFF2',
+            muted: '#8B96A6',
+            amber: '#E8A33D',
+            amberDark: '#C6812A',
+            teal: '#4FA3C7'
+          }
+        },
+        fontFamily: {
+          display: ['Oswald', 'sans-serif'],
+          body: ['Inter', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'monospace']
+        }
+      }
+    }
+  }
+</script>
+
+<!-- SDK Supabase (build UMD) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<style>
+  body { background-color: #1B222C; }
+  .tab-btn.active {
+    color: #E8A33D;
+    border-bottom-color: #E8A33D;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  ::selection { background: #E8A33D; color: #1B222C; }
+</style>
+</head>
+<body class="font-body text-fonte-text min-h-screen">
+
+  <!-- Barre supérieure -->
+  <header class="border-b border-fonte-border">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+      <div class="flex items-baseline gap-2">
+        <h1 class="font-display font-semibold text-2xl tracking-wide">FONTE</h1>
+        <span class="text-fonte-muted text-sm hidden sm:inline">journal d'entraînement</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <span id="sync-indicator" class="text-xs font-mono text-fonte-muted flex items-center gap-1.5">
+          <span id="sync-dot" class="w-2 h-2 rounded-full bg-fonte-muted"></span>
+          <span id="sync-label">Connexion…</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Navigation par onglets -->
+    <nav class="max-w-5xl mx-auto px-4 sm:px-6 flex gap-6 text-sm">
+      <button data-tab="calendrier" class="tab-btn active font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors">
+        Calendrier
+      </button>
+      <button data-tab="seance" class="tab-btn font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors text-fonte-muted">
+        Séance active
+      </button>
+      <button data-tab="bilan" class="tab-btn font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors text-fonte-muted">
+        Bilan
+      </button>
+      <button data-tab="donnees" class="tab-btn font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors text-fonte-muted">
+        Données
+      </button>
+    </nav>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+
+    <!-- Onglet Calendrier -->
+    <section id="panel-calendrier" class="tab-panel active">
+      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
+        <h2 class="font-display text-lg uppercase tracking-wide mb-2">Vue calendrier</h2>
+        <p class="text-fonte-muted text-sm leading-relaxed max-w-md">
+          La grille du calendrier, la sélection des jours et l'ajout d'exercices arriveront dans un prochain module.
+          Cette page pose pour l'instant la connexion à la base de données et l'ossature de l'application.
+        </p>
+      </div>
+    </section>
+
+    <!-- Onglet Séance active -->
+    <section id="panel-seance" class="tab-panel">
+      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
+        <h2 class="font-display text-lg uppercase tracking-wide mb-2">Séance active</h2>
+        <p class="text-fonte-muted text-sm leading-relaxed max-w-md">
+          Chronomètre de séance, saisie des séries et timer de repos seront implémentés ici.
+        </p>
+      </div>
+    </section>
+
+    <!-- Onglet Bilan -->
+    <section id="panel-bilan" class="tab-panel">
+      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
+        <h2 class="font-display text-lg uppercase tracking-wide mb-2">Bilan hebdomadaire</h2>
+        <p class="text-fonte-muted text-sm leading-relaxed max-w-md">
+          Graphiques de progression, volume total et bilan du dimanche soir viendront s'afficher ici.
+        </p>
+      </div>
+    </section>
+
+    <!-- Onglet Données (Export / Import) -->
+    <section id="panel-donnees" class="tab-panel">
+      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
+        <h2 class="font-display text-lg uppercase tracking-wide mb-4">Sauvegarde des données</h2>
+        <p class="text-fonte-muted text-sm leading-relaxed max-w-md mb-6">
+          Exportez l'intégralité de vos données (exercices, fétiches, séances, séries, sports) dans un fichier
+          JSON local, ou réimportez une sauvegarde précédente. Ces opérations n'affectent jamais vos données
+          tant que vous ne cliquez pas sur les boutons ci-dessous.
+        </p>
+
+        <div class="flex flex-wrap gap-3 mb-4">
+          <button id="btn-export" class="font-display uppercase tracking-wide text-sm px-5 py-2.5 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors">
+            Exporter en JSON
+          </button>
+
+          <label class="font-display uppercase tracking-wide text-sm px-5 py-2.5 border border-fonte-border text-fonte-text font-medium hover:border-fonte-amber transition-colors cursor-pointer">
+            Importer un fichier JSON
+            <input id="input-import" type="file" accept="application/json" class="hidden" />
+          </label>
+        </div>
+
+        <p id="donnees-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="max-w-5xl mx-auto px-4 sm:px-6 py-6 text-xs text-fonte-muted font-mono">
+    Fonte — stockage Supabase, cache local, export/import JSON.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
