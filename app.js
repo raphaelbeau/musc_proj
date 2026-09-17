@@ -654,16 +654,30 @@ function buildSerieRow(exo, serie, refreshRows) {
   repsLabel.textContent = 'reps';
   row.appendChild(repsLabel);
 
+  const actionsWrap = document.createElement('div');
+  actionsWrap.className = 'ml-auto flex items-center gap-1.5';
+
+  const btnRest = document.createElement('button');
+  btnRest.type = 'button';
+  btnRest.className = 'font-mono text-xs px-2 py-1 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors';
+  btnRest.title = 'Lancer le timer de repos';
+  btnRest.textContent = '⏱';
+  btnRest.addEventListener('click', () => {
+    startRestTimer(currentSeance.reposDefaultSecondes || 90);
+  });
+  actionsWrap.appendChild(btnRest);
+
   const btnRemove = document.createElement('button');
   btnRemove.type = 'button';
-  btnRemove.className = 'ml-auto text-fonte-muted hover:text-fonte-amber transition-colors text-lg leading-none';
+  btnRemove.className = 'text-fonte-muted hover:text-fonte-amber transition-colors text-lg leading-none';
   btnRemove.setAttribute('aria-label', 'Supprimer la série');
   btnRemove.textContent = '×';
   btnRemove.addEventListener('click', () => {
     exo.series = exo.series.filter((s) => s !== serie);
     refreshRows();
   });
-  row.appendChild(btnRemove);
+  actionsWrap.appendChild(btnRemove);
+  row.appendChild(actionsWrap);
 
   return row;
 }
@@ -836,11 +850,13 @@ async function refreshSeancesOfDay() {
 }
 
 function startNewSeance() {
-  currentSeance = { id: null, date: currentDateKey, heure_debut: null, heure_fin: null, duree_minutes: null, exercices: [] };
+  currentSeance = { id: null, date: currentDateKey, heure_debut: null, heure_fin: null, duree_minutes: null, exercices: [], reposDefaultSecondes: 90 };
   resetTimerUI();
   seanceSaveStatus.textContent = '';
+  updateSeanceReposLabel();
   renderExercicesList();
   renderSeanceListBar();
+  maybeAutoLoadFetiche();
 }
 
 async function loadSeanceById(seanceId) {
@@ -855,9 +871,11 @@ async function loadSeanceById(seanceId) {
     heure_debut: existing.heure_debut,
     heure_fin: existing.heure_fin,
     duree_minutes: existing.duree_minutes,
-    exercices: []
+    exercices: [],
+    reposDefaultSecondes: 90
   };
   await loadExistingSeries(existing.id);
+  updateSeanceReposLabel();
 
   // Une séance déjà enregistrée est considérée comme terminée : le chrono
   // ne se relance pas, mais les séries restent modifiables et ré-enregistrables.
@@ -949,7 +967,535 @@ document.querySelector('.tab-btn[data-tab="seance"]').addEventListener('click', 
 });
 
 // ---------------------------------------------------------
-// 5. Export JSON
+// 5. Séances fétiches (modèles de séances)
+// ---------------------------------------------------------
+const WEEKDAY_KEYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']; // indexé sur Date.getDay()
+const JOUR_LABELS = {
+  Monday: 'Lundi', Tuesday: 'Mardi', Wednesday: 'Mercredi', Thursday: 'Jeudi',
+  Friday: 'Vendredi', Saturday: 'Samedi', Sunday: 'Dimanche'
+};
+
+function weekdayKeyForDate(date) {
+  return WEEKDAY_KEYS[date.getDay()];
+}
+
+let fetichesCache = [];
+let exercicesLookup = new Map(); // id -> { id, nom, unite_charge }, alimenté à la demande
+let editingFeticheId = null;
+let modalFeticheExos = []; // [{ id, nom, unite_charge }], dans l'ordre choisi
+
+const fetichesListEl = document.getElementById('fetiches-list');
+const fetichesEmptyHint = document.getElementById('fetiches-empty-hint');
+const feticheModal = document.getElementById('fetiche-modal');
+const feticheModalTitle = document.getElementById('fetiche-modal-title');
+const feticheModalNom = document.getElementById('fetiche-modal-nom');
+const feticheModalRepos = document.getElementById('fetiche-modal-repos');
+const feticheModalJour = document.getElementById('fetiche-modal-jour');
+const feticheExoSearchInput = document.getElementById('fetiche-exo-search-input');
+const feticheExoSearchResults = document.getElementById('fetiche-exo-search-results');
+const feticheModalExosList = document.getElementById('fetiche-modal-exos-list');
+const feticheModalExosEmpty = document.getElementById('fetiche-modal-exos-empty');
+const feticheModalStatus = document.getElementById('fetiche-modal-status');
+const btnDeleteFetiche = document.getElementById('btn-delete-fetiche');
+const feticheQuickSelect = document.getElementById('fetiche-quick-select');
+const btnLoadFetiche = document.getElementById('btn-load-fetiche');
+const seanceReposLabel = document.getElementById('seance-repos-label');
+
+async function ensureExercicesLookup(ids) {
+  const missing = [...new Set(ids)].filter((id) => id && !exercicesLookup.has(id));
+  if (missing.length === 0) return;
+  try {
+    const { data, error } = await supabaseClient.from('exercices').select('*').in('id', missing);
+    if (error) throw error;
+    (data || []).forEach((exo) => exercicesLookup.set(exo.id, exo));
+  } catch (err) {
+    console.error('Erreur résolution des exercices :', err);
+  }
+}
+
+async function loadFetichesCache() {
+  try {
+    const { data, error } = await supabaseClient.from('fetiches').select('*').order('nom');
+    if (error) throw error;
+    fetichesCache = data || [];
+    const allIds = fetichesCache.flatMap((f) => f.exercices_ids_json || []);
+    await ensureExercicesLookup(allIds);
+  } catch (err) {
+    console.error('Erreur chargement des fétiches :', err);
+    fetichesCache = [];
+  }
+  renderFetichesList();
+  renderFeticheQuickSelect();
+}
+
+function renderFeticheQuickSelect() {
+  const previousValue = feticheQuickSelect.value;
+  feticheQuickSelect.innerHTML = '<option value="">Charger une fétiche…</option>';
+  fetichesCache.forEach((f) => {
+    const opt = document.createElement('option');
+    opt.value = f.id;
+    opt.textContent = f.nom;
+    feticheQuickSelect.appendChild(opt);
+  });
+  feticheQuickSelect.value = fetichesCache.some((f) => f.id === previousValue) ? previousValue : '';
+}
+
+function updateSeanceReposLabel() {
+  seanceReposLabel.textContent = `Repos par défaut : ${currentSeance?.reposDefaultSecondes ?? 90}s`;
+}
+
+function renderFetichesList() {
+  fetichesListEl.innerHTML = '';
+  if (fetichesCache.length === 0) {
+    fetichesListEl.appendChild(fetichesEmptyHint);
+    return;
+  }
+
+  fetichesCache.forEach((f) => {
+    const ids = f.exercices_ids_json || [];
+    const noms = ids.map((id) => exercicesLookup.get(id)?.nom || '?');
+    const jourLabel = f.jour_defaut ? JOUR_LABELS[f.jour_defaut] : 'Aucun jour par défaut';
+
+    const card = document.createElement('div');
+    card.className = 'bg-fonte-panel border border-fonte-border p-4';
+    card.innerHTML = `
+      <div class="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <h3 class="font-display text-base uppercase tracking-wide">${escapeHtml(f.nom)}</h3>
+          <p class="text-xs font-mono text-fonte-muted mt-1">${jourLabel} · repos ${f.repos_default_secondes ?? '—'}s · ${ids.length} exercice(s)</p>
+        </div>
+        <div class="flex gap-2 shrink-0">
+          <button type="button" data-role="edit" class="font-mono text-xs px-3 py-1.5 border border-fonte-border hover:border-fonte-amber transition-colors">Modifier</button>
+          <button type="button" data-role="delete" class="font-mono text-xs px-3 py-1.5 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors">Supprimer</button>
+        </div>
+      </div>
+      <p class="text-xs font-mono text-fonte-muted">${noms.length ? escapeHtml(noms.join(' · ')) : 'Aucun exercice dans ce modèle.'}</p>
+    `;
+    card.querySelector('[data-role="edit"]').addEventListener('click', () => openFeticheModal(f));
+    card.querySelector('[data-role="delete"]').addEventListener('click', () => deleteFetiche(f));
+    fetichesListEl.appendChild(card);
+  });
+}
+
+// --- Modale de création / édition ---
+function renderFeticheModalExosList() {
+  feticheModalExosList.innerHTML = '';
+  if (modalFeticheExos.length === 0) {
+    feticheModalExosList.appendChild(feticheModalExosEmpty);
+    return;
+  }
+
+  modalFeticheExos.forEach((exo, index) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 bg-fonte-panel2 border border-fonte-border px-3 py-1.5';
+
+    const label = document.createElement('span');
+    label.className = 'text-sm flex-1';
+    label.textContent = exo.nom;
+    row.appendChild(label);
+
+    const unitTag = document.createElement('span');
+    unitTag.className = 'text-xs font-mono text-fonte-muted';
+    unitTag.textContent = exo.unite_charge === 'par_cote' ? 'par côté' : 'total';
+    row.appendChild(unitTag);
+
+    const btnUp = document.createElement('button');
+    btnUp.type = 'button';
+    btnUp.className = 'text-fonte-muted hover:text-fonte-amber transition-colors disabled:opacity-30 disabled:cursor-not-allowed px-1';
+    btnUp.textContent = '↑';
+    btnUp.disabled = index === 0;
+    btnUp.addEventListener('click', () => {
+      [modalFeticheExos[index - 1], modalFeticheExos[index]] = [modalFeticheExos[index], modalFeticheExos[index - 1]];
+      renderFeticheModalExosList();
+    });
+    row.appendChild(btnUp);
+
+    const btnDown = document.createElement('button');
+    btnDown.type = 'button';
+    btnDown.className = 'text-fonte-muted hover:text-fonte-amber transition-colors disabled:opacity-30 disabled:cursor-not-allowed px-1';
+    btnDown.textContent = '↓';
+    btnDown.disabled = index === modalFeticheExos.length - 1;
+    btnDown.addEventListener('click', () => {
+      [modalFeticheExos[index + 1], modalFeticheExos[index]] = [modalFeticheExos[index], modalFeticheExos[index + 1]];
+      renderFeticheModalExosList();
+    });
+    row.appendChild(btnDown);
+
+    const btnRemove = document.createElement('button');
+    btnRemove.type = 'button';
+    btnRemove.className = 'text-fonte-muted hover:text-fonte-amber transition-colors text-lg leading-none px-1';
+    btnRemove.textContent = '×';
+    btnRemove.addEventListener('click', () => {
+      modalFeticheExos.splice(index, 1);
+      renderFeticheModalExosList();
+    });
+    row.appendChild(btnRemove);
+
+    feticheModalExosList.appendChild(row);
+  });
+}
+
+function hideFeticheSearchResults() {
+  feticheExoSearchResults.classList.add('hidden');
+  feticheExoSearchResults.innerHTML = '';
+}
+
+let feticheSearchDebounce = null;
+feticheExoSearchInput.addEventListener('input', () => {
+  clearTimeout(feticheSearchDebounce);
+  const query = feticheExoSearchInput.value.trim();
+  if (!query) {
+    hideFeticheSearchResults();
+    return;
+  }
+  feticheSearchDebounce = setTimeout(() => runFeticheExoSearch(query), 250);
+});
+
+document.addEventListener('click', (event) => {
+  if (!feticheExoSearchResults.contains(event.target) && event.target !== feticheExoSearchInput) {
+    hideFeticheSearchResults();
+  }
+});
+
+async function runFeticheExoSearch(query) {
+  try {
+    const { data, error } = await supabaseClient
+      .from('exercices')
+      .select('*')
+      .ilike('nom', `%${query}%`)
+      .order('nom')
+      .limit(8);
+    if (error) throw error;
+    renderFeticheExoSearchResults(query, data || []);
+  } catch (err) {
+    console.error('Erreur recherche exercice (fétiche) :', err);
+  }
+}
+
+function renderFeticheExoSearchResults(query, matches) {
+  feticheExoSearchResults.innerHTML = '';
+
+  matches.forEach((exo) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'w-full text-left px-3 py-2 text-sm hover:bg-fonte-panel border-b border-fonte-border last:border-b-0 flex items-center justify-between';
+    item.innerHTML = `<span>${escapeHtml(exo.nom)}</span><span class="text-xs font-mono text-fonte-muted">${exo.unite_charge === 'par_cote' ? 'par côté' : 'total'}</span>`;
+    item.addEventListener('click', () => {
+      addExoToFeticheModal(exo);
+      feticheExoSearchInput.value = '';
+      hideFeticheSearchResults();
+    });
+    feticheExoSearchResults.appendChild(item);
+  });
+
+  const exactMatch = matches.some((e) => e.nom.trim().toLowerCase() === query.trim().toLowerCase());
+  if (!exactMatch && query.trim().length > 0) {
+    const createWrap = document.createElement('div');
+    createWrap.className = 'p-3 border-t border-fonte-border';
+    createWrap.innerHTML = `
+      <p class="text-xs font-mono text-fonte-muted mb-2">Créer « ${escapeHtml(query.trim())} » comme nouvel exercice :</p>
+      <div class="flex items-center gap-4 mb-2 text-xs font-mono">
+        <label class="flex items-center gap-1.5"><input type="radio" name="new-exo-unit-fetiche" value="total" checked class="accent-fonte-amber"> Poids total</label>
+        <label class="flex items-center gap-1.5"><input type="radio" name="new-exo-unit-fetiche" value="par_cote" class="accent-fonte-amber"> Par côté</label>
+      </div>
+      <button type="button" data-role="confirm-create"
+        class="font-display uppercase tracking-wide text-xs px-3 py-1.5 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors">
+        Créer et ajouter
+      </button>
+    `;
+    createWrap.querySelector('[data-role="confirm-create"]').addEventListener('click', () => {
+      const unit = createWrap.querySelector('input[name="new-exo-unit-fetiche"]:checked').value;
+      createExerciseAndAddToFetiche(query.trim(), unit);
+    });
+    feticheExoSearchResults.appendChild(createWrap);
+  }
+
+  feticheExoSearchResults.classList.remove('hidden');
+}
+
+async function createExerciseAndAddToFetiche(nom, uniteCharge) {
+  try {
+    const { data, error } = await supabaseClient
+      .from('exercices')
+      .insert({ nom, unite_charge: uniteCharge })
+      .select()
+      .single();
+    if (error) throw error;
+    exercicesLookup.set(data.id, data);
+    addExoToFeticheModal(data);
+    feticheExoSearchInput.value = '';
+    hideFeticheSearchResults();
+  } catch (err) {
+    console.error('Erreur création exercice (fétiche) :', err);
+    if (err.code === '23505') {
+      feticheModalStatus.textContent = `Un exercice nommé « ${nom} » existe déjà : recherchez-le plutôt que de le recréer.`;
+    } else {
+      feticheModalStatus.textContent = "Échec de la création de l'exercice (voir console).";
+    }
+  }
+}
+
+function addExoToFeticheModal(exo) {
+  if (modalFeticheExos.some((e) => e.id === exo.id)) return;
+  modalFeticheExos.push({ id: exo.id, nom: exo.nom, unite_charge: exo.unite_charge });
+  renderFeticheModalExosList();
+}
+
+function openFeticheModal(fetiche) {
+  editingFeticheId = fetiche ? fetiche.id : null;
+  feticheModalTitle.textContent = fetiche ? 'Modifier la fétiche' : 'Nouvelle fétiche';
+  feticheModalNom.value = fetiche ? fetiche.nom : '';
+  feticheModalRepos.value = fetiche ? (fetiche.repos_default_secondes ?? 90) : 90;
+  feticheModalJour.value = fetiche ? (fetiche.jour_defaut || '') : '';
+  feticheModalStatus.textContent = '';
+  btnDeleteFetiche.classList.toggle('hidden', !fetiche);
+
+  const ids = fetiche ? (fetiche.exercices_ids_json || []) : [];
+  modalFeticheExos = ids.map((id) => {
+    const exo = exercicesLookup.get(id);
+    return exo ? { id: exo.id, nom: exo.nom, unite_charge: exo.unite_charge } : { id, nom: '(exercice introuvable)', unite_charge: 'total' };
+  });
+  renderFeticheModalExosList();
+
+  feticheModal.classList.remove('hidden');
+  feticheModalNom.focus();
+}
+
+function closeFeticheModal() {
+  feticheModal.classList.add('hidden');
+  editingFeticheId = null;
+  modalFeticheExos = [];
+  hideFeticheSearchResults();
+}
+
+document.getElementById('btn-new-fetiche').addEventListener('click', () => openFeticheModal(null));
+document.getElementById('btn-close-fetiche-modal').addEventListener('click', closeFeticheModal);
+document.getElementById('btn-cancel-fetiche').addEventListener('click', closeFeticheModal);
+feticheModal.addEventListener('click', (event) => {
+  if (event.target === feticheModal) closeFeticheModal();
+});
+
+document.getElementById('btn-save-fetiche').addEventListener('click', async () => {
+  const nom = feticheModalNom.value.trim();
+  if (!nom) {
+    feticheModalStatus.textContent = 'Le nom est obligatoire.';
+    return;
+  }
+
+  const payload = {
+    nom,
+    jour_defaut: feticheModalJour.value || null,
+    exercices_ids_json: modalFeticheExos.map((e) => e.id),
+    repos_default_secondes: parseInt(feticheModalRepos.value, 10) || null
+  };
+
+  feticheModalStatus.textContent = 'Enregistrement…';
+  try {
+    if (editingFeticheId) {
+      const { error } = await supabaseClient.from('fetiches').update(payload).eq('id', editingFeticheId);
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseClient.from('fetiches').insert(payload);
+      if (error) throw error;
+    }
+    closeFeticheModal();
+    await loadFetichesCache();
+  } catch (err) {
+    console.error('Erreur enregistrement fétiche :', err);
+    feticheModalStatus.textContent = "Échec de l'enregistrement (voir console).";
+  }
+});
+
+btnDeleteFetiche.addEventListener('click', async () => {
+  if (!editingFeticheId) return;
+  if (!window.confirm('Supprimer définitivement cette séance fétiche ? Les séances déjà enregistrées ne sont pas affectées.')) return;
+  try {
+    const { error } = await supabaseClient.from('fetiches').delete().eq('id', editingFeticheId);
+    if (error) throw error;
+    closeFeticheModal();
+    await loadFetichesCache();
+  } catch (err) {
+    console.error('Erreur suppression fétiche :', err);
+    feticheModalStatus.textContent = 'Échec de la suppression (voir console).';
+  }
+});
+
+async function deleteFetiche(fetiche) {
+  if (!window.confirm(`Supprimer « ${fetiche.nom} » ? Les séances déjà enregistrées ne sont pas affectées.`)) return;
+  try {
+    const { error } = await supabaseClient.from('fetiches').delete().eq('id', fetiche.id);
+    if (error) throw error;
+    await loadFetichesCache();
+  } catch (err) {
+    console.error('Erreur suppression fétiche :', err);
+  }
+}
+
+document.querySelector('.tab-btn[data-tab="fetiches"]').addEventListener('click', () => {
+  loadFetichesCache();
+});
+
+// --- Application d'une fétiche à la séance du jour (sans jamais modifier le modèle) ---
+async function applyFeticheToSession(fetiche, isAuto) {
+  const ids = fetiche.exercices_ids_json || [];
+  await ensureExercicesLookup(ids);
+
+  let addedCount = 0;
+  ids.forEach((id) => {
+    const exo = exercicesLookup.get(id);
+    if (!exo) return;
+    const already = currentSeance.exercices.some((e) => e.exercice_id === exo.id);
+    if (!already) {
+      currentSeance.exercices.push({
+        exercice_id: exo.id,
+        nom: exo.nom,
+        unite_charge: exo.unite_charge,
+        series: defaultSeriesSet()
+      });
+      addedCount += 1;
+    }
+  });
+
+  if (fetiche.repos_default_secondes) {
+    currentSeance.reposDefaultSecondes = fetiche.repos_default_secondes;
+    updateSeanceReposLabel();
+  }
+
+  renderExercicesList();
+  seanceSaveStatus.textContent = isAuto
+    ? `Fétiche « ${fetiche.nom} » chargée automatiquement (jour par défaut) — ${addedCount} exercice(s) ajouté(s).`
+    : `Fétiche « ${fetiche.nom} » chargée — ${addedCount} exercice(s) ajouté(s).`;
+}
+
+function maybeAutoLoadFetiche() {
+  if (!currentSeance || currentSeance.exercices.length > 0) return;
+  const weekday = weekdayKeyForDate(window.appState.selectedDate);
+  const match = fetichesCache.find((f) => f.jour_defaut === weekday);
+  if (match) applyFeticheToSession(match, true);
+}
+
+btnLoadFetiche.addEventListener('click', () => {
+  const id = feticheQuickSelect.value;
+  if (!id) return;
+  const fetiche = fetichesCache.find((f) => f.id === id);
+  if (fetiche) applyFeticheToSession(fetiche, false);
+});
+
+// ---------------------------------------------------------
+// 6. Timer de repos
+// ---------------------------------------------------------
+let restTimerInterval = null;
+let restTimerRemaining = 0;
+let restTimerTotal = 0;
+let restTimerRunning = false;
+
+const restTimerBar = document.getElementById('rest-timer-bar');
+const restTimerDisplay = document.getElementById('rest-timer-display');
+const restTimerProgress = document.getElementById('rest-timer-progress');
+const btnRestMinus = document.getElementById('btn-rest-minus');
+const btnRestPlus = document.getElementById('btn-rest-plus');
+const btnRestPause = document.getElementById('btn-rest-pause');
+const btnRestReset = document.getElementById('btn-rest-reset');
+const btnRestClose = document.getElementById('btn-rest-close');
+
+function formatMMSS(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+function updateRestTimerDisplay() {
+  restTimerDisplay.textContent = formatMMSS(restTimerRemaining);
+  const pct = restTimerTotal > 0 ? Math.max(0, Math.min(1, restTimerRemaining / restTimerTotal)) : 0;
+  restTimerProgress.style.width = `${pct * 100}%`;
+}
+
+function playRestEndAlert() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 0.5);
+    oscillator.onended = () => ctx.close();
+  } catch (err) {
+    console.error('Bip indisponible sur cet appareil :', err);
+  }
+  if (navigator.vibrate) {
+    try { navigator.vibrate([200, 100, 200]); } catch (err) { /* vibration indisponible, sans conséquence */ }
+  }
+}
+
+function tickRestTimer() {
+  restTimerRemaining -= 1;
+  if (restTimerRemaining <= 0) {
+    restTimerRemaining = 0;
+    updateRestTimerDisplay();
+    clearInterval(restTimerInterval);
+    restTimerInterval = null;
+    restTimerRunning = false;
+    btnRestPause.textContent = 'Relancer';
+    restTimerBar.classList.add('rest-done');
+    playRestEndAlert();
+    return;
+  }
+  updateRestTimerDisplay();
+}
+
+function startRestTimer(seconds) {
+  restTimerTotal = seconds;
+  restTimerRemaining = seconds;
+  restTimerRunning = true;
+  restTimerBar.classList.remove('rest-done', 'hidden');
+  btnRestPause.textContent = 'Pause';
+  updateRestTimerDisplay();
+  clearInterval(restTimerInterval);
+  restTimerInterval = setInterval(tickRestTimer, 1000);
+}
+
+btnRestPause.addEventListener('click', () => {
+  if (restTimerRunning) {
+    clearInterval(restTimerInterval);
+    restTimerInterval = null;
+    restTimerRunning = false;
+    btnRestPause.textContent = 'Reprendre';
+  } else {
+    if (restTimerRemaining <= 0) restTimerRemaining = restTimerTotal;
+    restTimerRunning = true;
+    restTimerBar.classList.remove('rest-done');
+    restTimerInterval = setInterval(tickRestTimer, 1000);
+    btnRestPause.textContent = 'Pause';
+  }
+});
+
+btnRestReset.addEventListener('click', () => startRestTimer(restTimerTotal || 90));
+btnRestPlus.addEventListener('click', () => {
+  restTimerRemaining += 15;
+  restTimerTotal = Math.max(restTimerTotal, restTimerRemaining);
+  updateRestTimerDisplay();
+});
+btnRestMinus.addEventListener('click', () => {
+  restTimerRemaining = Math.max(0, restTimerRemaining - 15);
+  updateRestTimerDisplay();
+});
+btnRestClose.addEventListener('click', () => {
+  clearInterval(restTimerInterval);
+  restTimerInterval = null;
+  restTimerBar.classList.add('hidden');
+});
+
+// Chargement initial des fétiches (nécessaire pour l'auto-application au jour par défaut).
+loadFetichesCache();
+
+// ---------------------------------------------------------
+// 7. Export JSON
 // ---------------------------------------------------------
 const exportStatus = document.getElementById('donnees-status');
 
@@ -991,7 +1537,7 @@ async function exportAllData() {
 document.getElementById('btn-export').addEventListener('click', exportAllData);
 
 // ---------------------------------------------------------
-// 6. Import JSON
+// 8. Import JSON
 // ---------------------------------------------------------
 function readFileAsText(file) {
   return new Promise((resolve, reject) => {
