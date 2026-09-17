@@ -43,6 +43,9 @@
 <!-- SDK Supabase (build UMD) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+<!-- Chart.js (graphiques de progression, onglet Suivi) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
 <style>
   body { background-color: #0A0A0B; }
   .tab-btn.active {
@@ -85,6 +88,13 @@
   .cal-view-btn { color: #7A7A80; background: transparent; }
   .cal-view-btn.active { color: #0A0A0B; background: #FF7A1F; }
 
+  .bilan-filter-btn { color: #7A7A80; background: transparent; }
+  .bilan-filter-btn.active { color: #0A0A0B; background: #FF7A1F; }
+
+  .seance-sub-btn { color: #7A7A80; background: transparent; }
+  .seance-sub-btn.active { color: #0A0A0B; background: #FF7A1F; }
+  .seance-sub-panel.hidden { display: none; }
+
   /* --- Modale (Fétiches) --- */
   .modal-overlay {
     position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75);
@@ -124,11 +134,15 @@
         <span class="text-fonte-muted text-sm hidden sm:inline">journal d'entraînement</span>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-4">
         <span id="sync-indicator" class="text-xs font-mono text-fonte-muted flex items-center gap-1.5">
           <span id="sync-dot" class="w-2 h-2 rounded-full bg-fonte-muted"></span>
           <span id="sync-label">Connexion…</span>
         </span>
+        <button id="btn-open-settings" type="button" aria-label="Paramètres et sauvegarde"
+          class="text-fonte-muted hover:text-fonte-amber transition-colors text-lg leading-none">
+          &#9881;
+        </button>
       </div>
     </div>
 
@@ -146,8 +160,8 @@
       <button data-tab="bilan" class="tab-btn font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors text-fonte-muted">
         Bilan
       </button>
-      <button data-tab="donnees" class="tab-btn font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors text-fonte-muted">
-        Données
+      <button data-tab="suivi" class="tab-btn font-display font-medium tracking-wide uppercase text-sm py-3 border-b-2 border-transparent transition-colors text-fonte-muted">
+        Suivi
       </button>
     </nav>
   </header>
@@ -213,64 +227,124 @@
 
       <h2 id="seance-date-label" class="font-display text-lg uppercase tracking-wide mb-3">Séance du —</h2>
 
-      <!-- Séances déjà enregistrées ce jour + bouton pour en démarrer une nouvelle -->
-      <div id="seance-list-bar" class="flex flex-wrap gap-2 mb-4"></div>
+      <!-- Bascule Musculation / Autre sport -->
+      <div class="flex border border-fonte-border text-xs font-display uppercase tracking-wide w-fit mb-5">
+        <button data-seance-sub="muscu" class="seance-sub-btn px-4 py-1.5 transition-colors">Musculation</button>
+        <button data-seance-sub="autre" class="seance-sub-btn px-4 py-1.5 transition-colors border-l border-fonte-border">Autre sport</button>
+      </div>
 
-      <!-- Chrono de séance -->
-      <div class="bg-fonte-panel border border-fonte-border p-4 mb-6 flex flex-wrap items-center gap-3">
-        <button id="btn-timer-start" type="button"
-          class="font-display uppercase tracking-wide text-xs px-4 py-2 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-          Commencer
-        </button>
-        <button id="btn-timer-stop" type="button"
-          class="font-display uppercase tracking-wide text-xs px-4 py-2 border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-          Terminer
-        </button>
-        <span id="timer-elapsed" class="font-mono text-sm text-fonte-text min-w-[4rem]"></span>
+      <!-- Sous-panneau : Musculation -->
+      <div id="seance-sub-muscu" class="seance-sub-panel">
 
-        <div class="flex items-center gap-2 sm:ml-auto">
-          <label for="input-manual-duration" class="text-xs font-mono text-fonte-muted whitespace-nowrap">Durée manuelle (min)</label>
-          <input id="input-manual-duration" type="number" min="0"
-            class="w-20 bg-fonte-panel2 border border-fonte-border text-sm font-mono px-2 py-1.5 focus:outline-none focus:border-fonte-amber" placeholder="—" />
+        <!-- Séances déjà enregistrées ce jour + bouton pour en démarrer une nouvelle -->
+        <div id="seance-list-bar" class="flex flex-wrap gap-2 mb-4"></div>
+
+        <!-- Chrono de séance -->
+        <div class="bg-fonte-panel border border-fonte-border p-4 mb-6 flex flex-wrap items-center gap-3">
+          <button id="btn-timer-start" type="button"
+            class="font-display uppercase tracking-wide text-xs px-4 py-2 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            Commencer
+          </button>
+          <button id="btn-timer-stop" type="button"
+            class="font-display uppercase tracking-wide text-xs px-4 py-2 border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            Terminer
+          </button>
+          <span id="timer-elapsed" class="font-mono text-sm text-fonte-text min-w-[4rem]"></span>
+
+          <div class="flex items-center gap-2 sm:ml-auto">
+            <label for="input-manual-duration" class="text-xs font-mono text-fonte-muted whitespace-nowrap">Durée manuelle (min)</label>
+            <input id="input-manual-duration" type="number" min="0"
+              class="w-20 bg-fonte-panel2 border border-fonte-border text-sm font-mono px-2 py-1.5 focus:outline-none focus:border-fonte-amber" placeholder="—" />
+          </div>
+
+          <button id="btn-save-updates" type="button"
+            class="hidden font-display uppercase tracking-wide text-xs px-4 py-2 border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors">
+            Enregistrer les modifications
+          </button>
+          <button id="btn-delete-seance" type="button"
+            class="hidden font-mono text-xs px-4 py-2 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors">
+            Supprimer cette séance
+          </button>
         </div>
 
-        <button id="btn-save-updates" type="button"
-          class="hidden font-display uppercase tracking-wide text-xs px-4 py-2 border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors">
-          Enregistrer les modifications
-        </button>
-        <button id="btn-delete-seance" type="button"
-          class="hidden font-mono text-xs px-4 py-2 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors">
-          Supprimer cette séance
-        </button>
+        <!-- Chargement rapide d'une séance fétiche -->
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <select id="fetiche-quick-select"
+            class="bg-fonte-panel2 border border-fonte-border text-sm font-mono px-3 py-2 focus:outline-none focus:border-fonte-amber">
+            <option value="">Charger une fétiche…</option>
+          </select>
+          <button id="btn-load-fetiche" type="button"
+            class="font-mono text-xs px-3 py-2 border border-fonte-border hover:border-fonte-amber transition-colors">
+            Charger
+          </button>
+          <span id="seance-repos-label" class="text-xs font-mono text-fonte-muted sm:ml-auto">Repos par défaut : 90s</span>
+        </div>
+
+        <!-- Recherche / création d'exercice -->
+        <div class="relative mb-6">
+          <input id="exo-search-input" type="text" autocomplete="off"
+            placeholder="Rechercher ou ajouter un exercice…"
+            class="w-full bg-fonte-panel2 border border-fonte-border text-sm px-4 py-3 focus:outline-none focus:border-fonte-amber" />
+          <div id="exo-search-results" class="absolute z-10 left-0 right-0 mt-1 bg-fonte-panel2 border border-fonte-border hidden max-h-80 overflow-y-auto shadow-lg"></div>
+        </div>
+
+        <!-- Exercices de la séance -->
+        <div id="seance-exercices-list" class="space-y-4 mb-3">
+          <p id="seance-empty-hint" class="text-sm text-fonte-muted font-mono">Aucun exercice ajouté pour l'instant.</p>
+        </div>
+
+        <p id="seance-save-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
       </div>
 
-      <!-- Chargement rapide d'une séance fétiche -->
-      <div class="flex flex-wrap items-center gap-2 mb-3">
-        <select id="fetiche-quick-select"
-          class="bg-fonte-panel2 border border-fonte-border text-sm font-mono px-3 py-2 focus:outline-none focus:border-fonte-amber">
-          <option value="">Charger une fétiche…</option>
-        </select>
-        <button id="btn-load-fetiche" type="button"
-          class="font-mono text-xs px-3 py-2 border border-fonte-border hover:border-fonte-amber transition-colors">
-          Charger
-        </button>
-        <span id="seance-repos-label" class="text-xs font-mono text-fonte-muted sm:ml-auto">Repos par défaut : 90s</span>
-      </div>
+      <!-- Sous-panneau : Autre sport -->
+      <div id="seance-sub-autre" class="seance-sub-panel hidden">
 
-      <!-- Recherche / création d'exercice -->
-      <div class="relative mb-6">
-        <input id="exo-search-input" type="text" autocomplete="off"
-          placeholder="Rechercher ou ajouter un exercice…"
-          class="w-full bg-fonte-panel2 border border-fonte-border text-sm px-4 py-3 focus:outline-none focus:border-fonte-amber" />
-        <div id="exo-search-results" class="absolute z-10 left-0 right-0 mt-1 bg-fonte-panel2 border border-fonte-border hidden max-h-80 overflow-y-auto shadow-lg"></div>
-      </div>
+        <!-- Entrées déjà enregistrées ce jour + bouton pour en ajouter une nouvelle -->
+        <div id="autre-list-bar" class="flex flex-wrap gap-2 mb-4"></div>
 
-      <!-- Exercices de la séance -->
-      <div id="seance-exercices-list" class="space-y-4 mb-3">
-        <p id="seance-empty-hint" class="text-sm text-fonte-muted font-mono">Aucun exercice ajouté pour l'instant.</p>
-      </div>
+        <!-- Recherche / création d'un exercice "autre sport" -->
+        <label for="autre-exo-search-input" class="text-xs font-mono text-fonte-muted block mb-1">Exercice (sport — activité précise)</label>
+        <div class="relative mb-4">
+          <input id="autre-exo-search-input" type="text" autocomplete="off"
+            placeholder="ex : Course à pied — Fractionné"
+            class="w-full bg-fonte-panel2 border border-fonte-border text-sm px-4 py-3 focus:outline-none focus:border-fonte-amber" />
+          <div id="autre-exo-search-results" class="absolute z-10 left-0 right-0 mt-1 bg-fonte-panel2 border border-fonte-border hidden max-h-80 overflow-y-auto shadow-lg"></div>
+        </div>
 
-      <p id="seance-save-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
+        <p id="autre-selected-label" class="text-sm font-mono text-fonte-muted mb-4">Aucun exercice sélectionné.</p>
+
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <label for="autre-duree" class="text-xs font-mono text-fonte-muted block mb-1">Durée (min) *</label>
+            <input id="autre-duree" type="number" min="0"
+              class="w-full bg-fonte-panel2 border border-fonte-border text-sm font-mono px-3 py-2 focus:outline-none focus:border-fonte-amber" />
+          </div>
+          <div>
+            <label for="autre-valeur" class="text-xs font-mono text-fonte-muted block mb-1">
+              Métrique <span id="autre-valeur-unite" class="text-fonte-muted"></span>
+            </label>
+            <input id="autre-valeur" type="number" min="0" step="0.01"
+              class="w-full bg-fonte-panel2 border border-fonte-border text-sm font-mono px-3 py-2 focus:outline-none focus:border-fonte-amber" placeholder="optionnel" />
+          </div>
+        </div>
+
+        <label for="autre-notes" class="text-xs font-mono text-fonte-muted block mb-1">Notes (optionnel)</label>
+        <textarea id="autre-notes" rows="2"
+          class="w-full bg-fonte-panel2 border border-fonte-border text-sm px-3 py-2 mb-4 focus:outline-none focus:border-fonte-amber" placeholder="ex : Fractionné 10x300m"></textarea>
+
+        <div class="flex items-center gap-2">
+          <button id="btn-save-autre" type="button"
+            class="font-display uppercase tracking-wide text-xs px-4 py-2 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors">
+            Enregistrer cette entrée
+          </button>
+          <button id="btn-delete-autre" type="button"
+            class="hidden font-mono text-xs px-4 py-2 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors">
+            Supprimer cette entrée
+          </button>
+        </div>
+
+        <p id="autre-save-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem] mt-2"></p>
+      </div>
     </section>
 
     <!-- Onglet Fétiches -->
@@ -290,36 +364,87 @@
 
     <!-- Onglet Bilan -->
     <section id="panel-bilan" class="tab-panel">
-      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
-        <h2 class="font-display text-lg uppercase tracking-wide mb-2">Bilan hebdomadaire</h2>
-        <p class="text-fonte-muted text-sm leading-relaxed max-w-md">
-          Graphiques de progression, volume total et bilan du dimanche soir viendront s'afficher ici.
-        </p>
+
+      <!-- Navigation de semaine -->
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+          <button id="bilan-prev" aria-label="Semaine précédente"
+            class="w-9 h-9 flex items-center justify-center border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors">
+            <span aria-hidden="true">&#8592;</span>
+          </button>
+          <h2 id="bilan-period-label" class="font-display text-lg uppercase tracking-wide min-w-[13rem] text-center sm:text-left">—</h2>
+          <button id="bilan-next" aria-label="Semaine suivante"
+            class="w-9 h-9 flex items-center justify-center border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors">
+            <span aria-hidden="true">&#8594;</span>
+          </button>
+        </div>
+        <button id="bilan-today" type="button" class="font-mono text-xs px-3 py-1.5 border border-fonte-border hover:border-fonte-amber transition-colors">
+          Semaine actuelle
+        </button>
+      </div>
+
+      <!-- Filtre temps total -->
+      <div class="flex border border-fonte-border text-xs font-display uppercase tracking-wide w-fit mb-4">
+        <button data-bilan-filter="tout" class="bilan-filter-btn px-3 py-1.5 transition-colors">Tout</button>
+        <button data-bilan-filter="muscu" class="bilan-filter-btn px-3 py-1.5 transition-colors border-l border-fonte-border">Muscu</button>
+        <button data-bilan-filter="autre" class="bilan-filter-btn px-3 py-1.5 transition-colors border-l border-fonte-border">Autres sports</button>
+      </div>
+
+      <!-- Cartes de synthèse -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        <div class="bg-fonte-panel border border-fonte-border p-4">
+          <p class="text-xs font-mono text-fonte-muted uppercase mb-1">Temps total</p>
+          <p id="bilan-temps-total" class="font-display text-3xl">—</p>
+        </div>
+        <div class="bg-fonte-panel border border-fonte-border p-4">
+          <p class="text-xs font-mono text-fonte-muted uppercase mb-1">Score volume musculation</p>
+          <p id="bilan-volume-total" class="font-display text-3xl text-fonte-amber">—</p>
+          <p class="text-[0.65rem] font-mono text-fonte-muted mt-1">Σ (répétitions × poids) sur la semaine — plus c'est haut, mieux c'est</p>
+        </div>
+      </div>
+
+      <!-- Détail par jour -->
+      <div class="bg-fonte-panel border border-fonte-border p-4 mb-6">
+        <h3 class="font-display text-sm uppercase tracking-wide mb-3">Détail par jour</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs font-mono">
+            <thead>
+              <tr class="text-fonte-muted uppercase text-left">
+                <th class="py-1 pr-3">Jour</th>
+                <th class="py-1 pr-3">Muscu</th>
+                <th class="py-1 pr-3">Autres sports</th>
+                <th class="py-1">Total</th>
+              </tr>
+            </thead>
+            <tbody id="bilan-jours-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Détail par sport (autres sports) -->
+      <div class="bg-fonte-panel border border-fonte-border p-4">
+        <h3 class="font-display text-sm uppercase tracking-wide mb-3">Répartition autres sports</h3>
+        <div id="bilan-sports-detail" class="text-xs font-mono text-fonte-muted">Aucune donnée pour cette semaine.</div>
       </div>
     </section>
 
-    <!-- Onglet Données (Export / Import) -->
-    <section id="panel-donnees" class="tab-panel">
-      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
-        <h2 class="font-display text-lg uppercase tracking-wide mb-4">Sauvegarde des données</h2>
-        <p class="text-fonte-muted text-sm leading-relaxed max-w-md mb-6">
-          Exportez l'intégralité de vos données (exercices, fétiches, séances, séries, sports) dans un fichier
-          JSON local, ou réimportez une sauvegarde précédente. Ces opérations n'affectent jamais vos données
-          tant que vous ne cliquez pas sur les boutons ci-dessous.
+    <!-- Onglet Suivi (graphiques de progression) -->
+    <section id="panel-suivi" class="tab-panel">
+      <h2 class="font-display text-lg uppercase tracking-wide mb-4">Suivi de progression</h2>
+
+      <div class="relative mb-3">
+        <input id="suivi-search-input" type="text" autocomplete="off"
+          placeholder="Rechercher un exercice à suivre (musculation ou autre sport)…"
+          class="w-full bg-fonte-panel2 border border-fonte-border text-sm px-4 py-3 focus:outline-none focus:border-fonte-amber" />
+        <div id="suivi-search-results" class="absolute z-10 left-0 right-0 mt-1 bg-fonte-panel2 border border-fonte-border hidden max-h-80 overflow-y-auto shadow-lg"></div>
+      </div>
+
+      <div id="suivi-selected-chips" class="flex flex-wrap gap-2 mb-6"></div>
+
+      <div id="suivi-charts-container" class="space-y-6">
+        <p id="suivi-empty-hint" class="text-sm text-fonte-muted font-mono">
+          Recherchez un exercice ci-dessus pour afficher sa courbe de progression.
         </p>
-
-        <div class="flex flex-wrap gap-3 mb-4">
-          <button id="btn-export" class="font-display uppercase tracking-wide text-sm px-5 py-2.5 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors">
-            Exporter en JSON
-          </button>
-
-          <label class="font-display uppercase tracking-wide text-sm px-5 py-2.5 border border-fonte-border text-fonte-text font-medium hover:border-fonte-amber transition-colors cursor-pointer">
-            Importer un fichier JSON
-            <input id="input-import" type="file" accept="application/json" class="hidden" />
-          </label>
-        </div>
-
-        <p id="donnees-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
       </div>
     </section>
 
@@ -328,6 +453,35 @@
   <footer class="max-w-5xl mx-auto px-4 sm:px-6 py-6 text-xs text-fonte-muted font-mono">
     Fonte — stockage Supabase, cache local, export/import JSON.
   </footer>
+
+  <!-- Modale : paramètres et sauvegarde (icône engrenage) -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-display text-lg uppercase tracking-wide">Paramètres &amp; sauvegarde</h2>
+        <button id="btn-close-settings-modal" type="button" class="text-fonte-muted hover:text-fonte-amber text-xl leading-none">&times;</button>
+      </div>
+
+      <p class="text-fonte-muted text-sm leading-relaxed mb-5">
+        Exportez l'intégralité de vos données (exercices, fétiches, séances, séries, sports) dans un fichier
+        JSON local, ou réimportez une sauvegarde précédente. Ces opérations n'affectent jamais vos données
+        tant que vous ne cliquez pas sur les boutons ci-dessous.
+      </p>
+
+      <div class="flex flex-wrap gap-3 mb-4">
+        <button id="btn-export" class="font-display uppercase tracking-wide text-sm px-5 py-2.5 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors">
+          Exporter en JSON
+        </button>
+
+        <label class="font-display uppercase tracking-wide text-sm px-5 py-2.5 border border-fonte-border text-fonte-text font-medium hover:border-fonte-amber transition-colors cursor-pointer">
+          Importer un fichier JSON
+          <input id="input-import" type="file" accept="application/json" class="hidden" />
+        </label>
+      </div>
+
+      <p id="donnees-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
+    </div>
+  </div>
 
   <!-- Modale : création / édition d'une séance fétiche -->
   <div id="fetiche-modal" class="modal-overlay hidden">
