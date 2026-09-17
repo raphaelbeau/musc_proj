@@ -1,0 +1,20 @@
+{
+  "short_name": "Font",
+  "name": "Appli sport",
+  "icons": [
+    {
+      "src": "Gemini_Generated_Image_d5unz6d5unz6d5un.jpg",
+      "type": "image/joeg",
+      "sizes": "1024 × 1024"
+    },
+    {
+      "src": "Gemini_Generated_Image_d5unz6d5unz6d5un.jpg",
+      "type": "image/jpeg",
+      "sizes": "1024 × 1024"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff"
+}
