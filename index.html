@@ -179,12 +179,47 @@
 
     <!-- Onglet Séance active -->
     <section id="panel-seance" class="tab-panel">
-      <div class="bg-fonte-panel border border-fonte-border rounded-none p-6">
-        <h2 class="font-display text-lg uppercase tracking-wide mb-2">Séance active</h2>
-        <p class="text-fonte-muted text-sm leading-relaxed max-w-md">
-          Chronomètre de séance, saisie des séries et timer de repos seront implémentés ici.
-        </p>
+
+      <h2 id="seance-date-label" class="font-display text-lg uppercase tracking-wide mb-4">Séance du —</h2>
+
+      <!-- Chrono de séance -->
+      <div class="bg-fonte-panel border border-fonte-border p-4 mb-6 flex flex-wrap items-center gap-3">
+        <button id="btn-timer-start" type="button"
+          class="font-display uppercase tracking-wide text-xs px-4 py-2 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          Commencer
+        </button>
+        <button id="btn-timer-stop" type="button"
+          class="font-display uppercase tracking-wide text-xs px-4 py-2 border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          Terminer
+        </button>
+        <span id="timer-elapsed" class="font-mono text-sm text-fonte-text min-w-[4rem]"></span>
+
+        <div class="flex items-center gap-2 sm:ml-auto">
+          <label for="input-manual-duration" class="text-xs font-mono text-fonte-muted whitespace-nowrap">Durée manuelle (min)</label>
+          <input id="input-manual-duration" type="number" min="0"
+            class="w-20 bg-fonte-panel2 border border-fonte-border text-sm font-mono px-2 py-1.5 focus:outline-none focus:border-fonte-amber" placeholder="—" />
+        </div>
+
+        <button id="btn-save-updates" type="button"
+          class="hidden font-display uppercase tracking-wide text-xs px-4 py-2 border border-fonte-border text-fonte-text hover:border-fonte-amber transition-colors">
+          Enregistrer les modifications
+        </button>
       </div>
+
+      <!-- Recherche / création d'exercice -->
+      <div class="relative mb-6">
+        <input id="exo-search-input" type="text" autocomplete="off"
+          placeholder="Rechercher ou ajouter un exercice…"
+          class="w-full bg-fonte-panel2 border border-fonte-border text-sm px-4 py-3 focus:outline-none focus:border-fonte-amber" />
+        <div id="exo-search-results" class="absolute z-10 left-0 right-0 mt-1 bg-fonte-panel2 border border-fonte-border hidden max-h-80 overflow-y-auto shadow-lg"></div>
+      </div>
+
+      <!-- Exercices de la séance -->
+      <div id="seance-exercices-list" class="space-y-4 mb-3">
+        <p id="seance-empty-hint" class="text-sm text-fonte-muted font-mono">Aucun exercice ajouté pour l'instant.</p>
+      </div>
+
+      <p id="seance-save-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
     </section>
 
     <!-- Onglet Bilan -->
