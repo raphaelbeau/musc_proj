@@ -7,7 +7,7 @@
 // 0. CONFIGURATION — à renseigner avec les identifiants de votre projet Supabase
 //    (Project Settings > API dans le dashboard Supabase)
 // ---------------------------------------------------------
-const SUPABASE_URL = 'https://bwpglzrnpurbsufyrzoz.supabase.co/rest/v1/';
+const SUPABASE_URL = 'https://bwpglzrnpurbsufyrzoz.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_7y1e1M0Dcy7B7k89G2eq1w_gegUKKcM';
 
 // Liste des tables gérées par l'application, dans un ORDRE DE DÉPENDANCE
@@ -15,7 +15,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_7y1e1M0Dcy7B7k89G2eq1w_gegUKKcM';
 // Cet ordre est utilisé tel quel pour l'export et inversé pour l'import.
 const TABLES = ['exercices', 'fetiches', 'seances', 'series', 'autres_sports'];
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ---------------------------------------------------------
 // 1. Indicateur de connexion
@@ -40,7 +40,7 @@ async function checkConnection() {
   }
   setSyncStatus('checking', 'Connexion…');
   try {
-    const { error } = await supabase.from('exercices').select('id').limit(1);
+    const { error } = await supabaseClient.from('exercices').select('id').limit(1);
     if (error) throw error;
     setSyncStatus('ok', 'Connecté à Supabase');
   } catch (err) {
@@ -148,7 +148,7 @@ async function fetchIndicatorsForRange(start, end) {
   // Renvoie une Map dateKey -> { muscu: bool, autre: bool }
   const map = new Map();
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('seances')
       .select('date, type')
       .gte('date', toDateKey(start))
@@ -257,7 +257,7 @@ async function renderDaySummary() {
   const dateKey = toDateKey(date);
 
   try {
-    const { data: seancesJour, error } = await supabase
+    const { data: seancesJour, error } = await supabaseClient
       .from('seances')
       .select('*')
       .eq('date', dateKey)
@@ -276,7 +276,7 @@ async function renderDaySummary() {
     const lines = [];
 
     if (muscuIds.length > 0) {
-      const { data: series, error: seriesError } = await supabase
+      const { data: series, error: seriesError } = await supabaseClient
         .from('series')
         .select('exercice_id, poids_kg, reps, exercices ( nom )')
         .in('seance_id', muscuIds);
@@ -300,7 +300,7 @@ async function renderDaySummary() {
     }
 
     if (autreIds.length > 0) {
-      const { data: autres, error: autresError } = await supabase
+      const { data: autres, error: autresError } = await supabaseClient
         .from('autres_sports')
         .select('nom_sport, duree_minutes, metrique')
         .in('seance_id', autreIds);
@@ -372,7 +372,7 @@ async function exportAllData() {
 
   try {
     for (const table of TABLES) {
-      const { data, error } = await supabase.from(table).select('*');
+      const { data, error } = await supabaseClient.from(table).select('*');
       if (error) throw new Error(`Table "${table}" : ${error.message}`);
       payload.tables[table] = data;
     }
@@ -430,7 +430,7 @@ async function importAllData(file) {
       const rows = payload.tables[table];
       if (!Array.isArray(rows) || rows.length === 0) continue;
 
-      const { error } = await supabase.from(table).upsert(rows, { onConflict: 'id' });
+      const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
       if (error) throw new Error(`Table "${table}" : ${error.message}`);
       totalUpserted += rows.length;
     }
