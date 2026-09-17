@@ -7,8 +7,8 @@
 // 0. CONFIGURATION — à renseigner avec les identifiants de votre projet Supabase
 //    (Project Settings > API dans le dashboard Supabase)
 // ---------------------------------------------------------
-const SUPABASE_URL = 'https://bwpglzrnpurbsufyrzoz.supabase.co/rest/v1/';
-const SUPABASE_ANON_KEY = 'sb_publishable_7y1e1M0Dcy7B7k89G2eq1w_gegUKKcM';
+const SUPABASE_URL = 'https://VOTRE-PROJET.supabase.co';
+const SUPABASE_ANON_KEY = 'VOTRE-CLE-ANON-PUBLIQUE';
 
 // Liste des tables gérées par l'application, dans un ORDRE DE DÉPENDANCE
 // (une table ne référence que des tables qui la précèdent dans cette liste).
@@ -74,7 +74,291 @@ tabButtons.forEach((btn) => {
 });
 
 // ---------------------------------------------------------
-// 3. Export JSON
+// 3. Calendrier
+// ---------------------------------------------------------
+const JOURS_SEMAINE = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const MOIS_NOMS = [
+  'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
+  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'
+];
+
+// État global exposé (utile pour le module "Séance active" à venir : il pourra
+// lire window.appState.selectedDate pour savoir sur quel jour créer une séance).
+window.appState = {
+  viewMode: 'month',       // 'month' | 'week'
+  viewDate: new Date(),    // mois ou semaine actuellement affiché
+  selectedDate: new Date() // jour sélectionné, "aujourd'hui" par défaut
+};
+
+function toDateKey(date) {
+  // Format YYYY-MM-DD en heure locale (évite les décalages liés à toISOString/UTC).
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function isSameDay(a, b) {
+  return toDateKey(a) === toDateKey(b);
+}
+
+function startOfWeek(date) {
+  // Semaine démarrant le lundi.
+  const d = new Date(date);
+  const day = (d.getDay() + 6) % 7; // 0 = lundi ... 6 = dimanche
+  d.setDate(d.getDate() - day);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+const calGrid = document.getElementById('cal-grid');
+const calPeriodLabel = document.getElementById('cal-period-label');
+const calWeekdayLabels = document.getElementById('cal-weekday-labels');
+const calViewButtons = document.querySelectorAll('.cal-view-btn');
+const daySummaryTitle = document.getElementById('day-summary-title');
+const daySummaryContent = document.getElementById('day-summary-content');
+
+function updateViewToggleUI() {
+  calViewButtons.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.calView === window.appState.viewMode);
+  });
+}
+
+function getVisibleRange() {
+  // Renvoie la plage de dates (début inclus, fin inclus) réellement affichée
+  // dans la grille, qu'on soit en vue mois (avec jours de bordure) ou semaine.
+  if (window.appState.viewMode === 'week') {
+    const start = startOfWeek(window.appState.viewDate);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return { start, end };
+  }
+
+  const year = window.appState.viewDate.getFullYear();
+  const month = window.appState.viewDate.getMonth();
+  const firstOfMonth = new Date(year, month, 1);
+  const lastOfMonth = new Date(year, month + 1, 0);
+  const start = startOfWeek(firstOfMonth);
+  const end = new Date(startOfWeek(lastOfMonth));
+  end.setDate(end.getDate() + 6);
+  return { start, end };
+}
+
+async function fetchIndicatorsForRange(start, end) {
+  // Renvoie une Map dateKey -> { muscu: bool, autre: bool }
+  const map = new Map();
+  try {
+    const { data, error } = await supabase
+      .from('seances')
+      .select('date, type')
+      .gte('date', toDateKey(start))
+      .lte('date', toDateKey(end));
+
+    if (error) throw error;
+
+    (data || []).forEach((row) => {
+      const entry = map.get(row.date) || { muscu: false, autre: false };
+      if (row.type === 'muscu') entry.muscu = true;
+      if (row.type === 'autre') entry.autre = true;
+      map.set(row.date, entry);
+    });
+  } catch (err) {
+    console.error('Erreur chargement indicateurs calendrier :', err);
+  }
+  return map;
+}
+
+async function renderCalendar() {
+  updateViewToggleUI();
+
+  const { start, end } = getVisibleRange();
+  const indicators = await fetchIndicatorsForRange(start, end);
+
+  // Libellé de la période affichée
+  if (window.appState.viewMode === 'week') {
+    const endLabel = new Date(end);
+    calPeriodLabel.textContent = `${start.getDate()} – ${endLabel.getDate()} ${MOIS_NOMS[endLabel.getMonth()]}`;
+    calWeekdayLabels.classList.add('hidden');
+  } else {
+    calPeriodLabel.textContent = `${MOIS_NOMS[window.appState.viewDate.getMonth()]} ${window.appState.viewDate.getFullYear()}`;
+    calWeekdayLabels.classList.remove('hidden');
+  }
+
+  calGrid.innerHTML = '';
+  calGrid.classList.toggle('week-row', window.appState.viewMode === 'week');
+
+  const currentMonth = window.appState.viewDate.getMonth();
+  const today = new Date();
+  const cursor = new Date(start);
+
+  while (cursor <= end) {
+    const dateKey = toDateKey(cursor);
+    const dayEntry = indicators.get(dateKey);
+    const isOutside = window.appState.viewMode === 'month' && cursor.getMonth() !== currentMonth;
+
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'cal-day' + (isOutside ? ' outside' : '') + (isSameDay(cursor, today) ? ' today' : '') + (isSameDay(cursor, window.appState.selectedDate) ? ' selected' : '');
+    cell.dataset.date = dateKey;
+
+    const num = document.createElement('span');
+    num.className = 'cal-day-num font-mono text-sm';
+    num.textContent = cursor.getDate();
+    cell.appendChild(num);
+
+    if (window.appState.viewMode === 'week') {
+      const label = document.createElement('span');
+      label.className = 'text-[0.65rem] font-mono text-fonte-muted uppercase';
+      label.textContent = JOURS_SEMAINE[(cursor.getDay() + 6) % 7];
+      cell.insertBefore(label, num);
+    }
+
+    const dots = document.createElement('span');
+    dots.className = 'cal-dots';
+    if (dayEntry?.muscu) {
+      const dot = document.createElement('span');
+      dot.className = 'cal-dot cal-dot-muscu';
+      dots.appendChild(dot);
+    }
+    if (dayEntry?.autre) {
+      const dot = document.createElement('span');
+      dot.className = 'cal-dot cal-dot-autre';
+      dots.appendChild(dot);
+    }
+    cell.appendChild(dots);
+
+    cell.addEventListener('click', () => {
+      window.appState.selectedDate = new Date(cursor);
+      // Si on clique un jour "hors mois", on recentre la vue sur son mois.
+      if (isOutside) {
+        window.appState.viewDate = new Date(cursor);
+      }
+      renderCalendar();
+      renderDaySummary();
+    });
+
+    calGrid.appendChild(cell);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+}
+
+function formatDayTitle(date) {
+  const isToday = isSameDay(date, new Date());
+  const jour = JOURS_SEMAINE[(date.getDay() + 6) % 7];
+  const label = `${jour} ${date.getDate()} ${MOIS_NOMS[date.getMonth()]}`;
+  return isToday ? `Aujourd'hui — ${label}` : label;
+}
+
+async function renderDaySummary() {
+  const date = window.appState.selectedDate;
+  daySummaryTitle.textContent = formatDayTitle(date);
+  daySummaryContent.textContent = 'Chargement…';
+
+  const dateKey = toDateKey(date);
+
+  try {
+    const { data: seancesJour, error } = await supabase
+      .from('seances')
+      .select('*')
+      .eq('date', dateKey)
+      .order('heure_debut', { ascending: true });
+
+    if (error) throw error;
+
+    if (!seancesJour || seancesJour.length === 0) {
+      daySummaryContent.textContent = 'Aucune séance enregistrée ce jour.';
+      return;
+    }
+
+    const muscuIds = seancesJour.filter((s) => s.type === 'muscu').map((s) => s.id);
+    const autreIds = seancesJour.filter((s) => s.type === 'autre').map((s) => s.id);
+
+    const lines = [];
+
+    if (muscuIds.length > 0) {
+      const { data: series, error: seriesError } = await supabase
+        .from('series')
+        .select('exercice_id, poids_kg, reps, exercices ( nom )')
+        .in('seance_id', muscuIds);
+      if (seriesError) throw seriesError;
+
+      const parExercice = new Map();
+      (series || []).forEach((s) => {
+        const nom = s.exercices?.nom || 'Exercice';
+        const count = parExercice.get(nom) || 0;
+        parExercice.set(nom, count + 1);
+      });
+
+      if (parExercice.size > 0) {
+        const detail = Array.from(parExercice.entries())
+          .map(([nom, n]) => `${nom} (${n} série${n > 1 ? 's' : ''})`)
+          .join(' · ');
+        lines.push(`Musculation — ${detail}`);
+      } else {
+        lines.push('Musculation — séance enregistrée sans série.');
+      }
+    }
+
+    if (autreIds.length > 0) {
+      const { data: autres, error: autresError } = await supabase
+        .from('autres_sports')
+        .select('nom_sport, duree_minutes, metrique')
+        .in('seance_id', autreIds);
+      if (autresError) throw autresError;
+
+      (autres || []).forEach((a) => {
+        const metrique = a.metrique ? ` — ${a.metrique}` : '';
+        lines.push(`${a.nom_sport} — ${a.duree_minutes} min${metrique}`);
+      });
+    }
+
+    daySummaryContent.innerHTML = lines.map((l) => `<div class="mb-1">${l}</div>`).join('');
+  } catch (err) {
+    console.error('Erreur chargement du résumé du jour :', err);
+    daySummaryContent.textContent = 'Impossible de charger les séances de ce jour.';
+  }
+}
+
+calViewButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    window.appState.viewMode = btn.dataset.calView;
+    renderCalendar();
+  });
+});
+
+document.getElementById('cal-prev').addEventListener('click', () => {
+  const d = window.appState.viewDate;
+  if (window.appState.viewMode === 'week') {
+    d.setDate(d.getDate() - 7);
+  } else {
+    d.setMonth(d.getMonth() - 1);
+  }
+  window.appState.viewDate = new Date(d);
+  renderCalendar();
+});
+
+document.getElementById('cal-next').addEventListener('click', () => {
+  const d = window.appState.viewDate;
+  if (window.appState.viewMode === 'week') {
+    d.setDate(d.getDate() + 7);
+  } else {
+    d.setMonth(d.getMonth() + 1);
+  }
+  window.appState.viewDate = new Date(d);
+  renderCalendar();
+});
+
+document.getElementById('btn-add-seance').addEventListener('click', () => {
+  // Le module de saisie détaillé arrive dans un prochain prompt. En attendant,
+  // on bascule sur l'onglet "Séance active" avec le jour sélectionné en contexte.
+  document.querySelector('.tab-btn[data-tab="seance"]').click();
+});
+
+renderCalendar();
+renderDaySummary();
+
+// ---------------------------------------------------------
+// 4. Export JSON
 // ---------------------------------------------------------
 const exportStatus = document.getElementById('donnees-status');
 
@@ -116,7 +400,7 @@ async function exportAllData() {
 document.getElementById('btn-export').addEventListener('click', exportAllData);
 
 // ---------------------------------------------------------
-// 4. Import JSON
+// 5. Import JSON
 // ---------------------------------------------------------
 function readFileAsText(file) {
   return new Promise((resolve, reject) => {
