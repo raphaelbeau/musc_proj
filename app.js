@@ -13,7 +13,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_7y1e1M0Dcy7B7k89G2eq1w_gegUKKcM';
 // Liste des tables gérées par l'application, dans un ORDRE DE DÉPENDANCE
 // (une table ne référence que des tables qui la précèdent dans cette liste).
 // Cet ordre est utilisé tel quel pour l'export et inversé pour l'import.
-const TABLES = ['exercices', 'fetiches', 'seances', 'series', 'autres_sports'];
+const TABLES = ['exercices', 'exercices_autres', 'fetiches', 'seances', 'series', 'autres_sports'];
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -71,6 +71,30 @@ tabButtons.forEach((btn) => {
     tabPanels.forEach((panel) => panel.classList.remove('active'));
     document.getElementById(`panel-${target}`).classList.add('active');
   });
+});
+
+// --- Sous-onglets à l'intérieur de "Séance active" (Musculation / Autre sport) ---
+const seanceSubButtons = document.querySelectorAll('.seance-sub-btn');
+const seanceSubPanels = document.querySelectorAll('.seance-sub-panel');
+
+seanceSubButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.seanceSub;
+    seanceSubButtons.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    seanceSubPanels.forEach((panel) => panel.classList.add('hidden'));
+    document.getElementById(`seance-sub-${target}`).classList.remove('hidden');
+    if (target === 'autre') initAutreView();
+  });
+});
+seanceSubButtons[0]?.classList.add('active');
+
+// --- Modale Paramètres (icône engrenage) ---
+const settingsModal = document.getElementById('settings-modal');
+document.getElementById('btn-open-settings').addEventListener('click', () => settingsModal.classList.remove('hidden'));
+document.getElementById('btn-close-settings-modal').addEventListener('click', () => settingsModal.classList.add('hidden'));
+settingsModal.addEventListener('click', (event) => {
+  if (event.target === settingsModal) settingsModal.classList.add('hidden');
 });
 
 // ---------------------------------------------------------
@@ -449,7 +473,13 @@ btnTimerStop.addEventListener('click', async () => {
   await saveSeance();
 });
 
-btnSaveUpdates.addEventListener('click', () => saveSeance());
+btnSaveUpdates.addEventListener('click', () => {
+  // Permet de corriger la durée d'une séance déjà terminée (le chrono ne se
+  // relance pas, mais la durée saisie manuellement écrase l'ancienne valeur).
+  const manual = parseInt(manualDurationInput.value, 10);
+  if (manual > 0) currentSeance.duree_minutes = manual;
+  saveSeance();
+});
 
 btnDeleteSeance.addEventListener('click', () => {
   if (currentSeance?.id) deleteSeance(currentSeance.id);
@@ -924,10 +954,12 @@ async function loadSeanceById(seanceId) {
   updateSeanceReposLabel();
 
   // Une séance déjà enregistrée est considérée comme terminée : le chrono
-  // ne se relance pas, mais les séries restent modifiables et ré-enregistrables.
+  // ne se relance pas (pour ne pas fausser l'heure de début d'origine), mais la
+  // durée reste corrigible manuellement, tout comme les séries.
   btnTimerStart.disabled = true;
   btnTimerStop.disabled = true;
-  manualDurationInput.disabled = true;
+  manualDurationInput.disabled = false;
+  manualDurationInput.value = existing.duree_minutes ?? '';
   timerElapsed.textContent = existing.duree_minutes ? `${existing.duree_minutes} min (enregistrée)` : 'Enregistrée';
   btnSaveUpdates.classList.remove('hidden');
   btnDeleteSeance.classList.remove('hidden');
@@ -1012,10 +1044,371 @@ async function saveSeance() {
 
 document.querySelector('.tab-btn[data-tab="seance"]').addEventListener('click', () => {
   initSeanceView();
+  initAutreView();
 });
 
 // ---------------------------------------------------------
-// 5. Séances fétiches (modèles de séances)
+// 5. Sports complémentaires (autres sports)
+// ---------------------------------------------------------
+let exercicesAutresLookup = new Map(); // id -> { id, sport, nom, unite }
+let currentAutreEntry = null;
+let autresOfDay = [];
+let selectedAutreExercice = null; // { id, sport, nom, unite } en cours de sélection dans le formulaire
+
+const autreListBar = document.getElementById('autre-list-bar');
+const autreExoSearchInput = document.getElementById('autre-exo-search-input');
+const autreExoSearchResults = document.getElementById('autre-exo-search-results');
+const autreSelectedLabel = document.getElementById('autre-selected-label');
+const autreDureeInput = document.getElementById('autre-duree');
+const autreValeurInput = document.getElementById('autre-valeur');
+const autreValeurUnite = document.getElementById('autre-valeur-unite');
+const autreNotesInput = document.getElementById('autre-notes');
+const btnSaveAutre = document.getElementById('btn-save-autre');
+const btnDeleteAutre = document.getElementById('btn-delete-autre');
+const autreSaveStatus = document.getElementById('autre-save-status');
+
+async function ensureExercicesAutresLookup(ids) {
+  const missing = [...new Set(ids)].filter((id) => id && !exercicesAutresLookup.has(id));
+  if (missing.length === 0) return;
+  try {
+    const { data, error } = await supabaseClient.from('exercices_autres').select('*').in('id', missing);
+    if (error) throw error;
+    (data || []).forEach((exo) => exercicesAutresLookup.set(exo.id, exo));
+  } catch (err) {
+    console.error('Erreur résolution des exercices (autres sports) :', err);
+  }
+}
+
+function autreExoLabel(exo) {
+  return `${exo.sport} — ${exo.nom}`;
+}
+
+function hideAutreSearchResults() {
+  autreExoSearchResults.classList.add('hidden');
+  autreExoSearchResults.innerHTML = '';
+}
+
+let autreSearchDebounce = null;
+autreExoSearchInput.addEventListener('input', () => {
+  clearTimeout(autreSearchDebounce);
+  const query = autreExoSearchInput.value.trim();
+  if (!query) {
+    hideAutreSearchResults();
+    return;
+  }
+  autreSearchDebounce = setTimeout(() => runAutreExoSearch(query), 250);
+});
+
+document.addEventListener('click', (event) => {
+  if (!autreExoSearchResults.contains(event.target) && event.target !== autreExoSearchInput) {
+    hideAutreSearchResults();
+  }
+});
+
+async function runAutreExoSearch(query) {
+  try {
+    const { data, error } = await supabaseClient
+      .from('exercices_autres')
+      .select('*')
+      .or(`nom.ilike.%${query}%,sport.ilike.%${query}%`)
+      .order('sport')
+      .limit(10);
+    if (error) throw error;
+    renderAutreExoSearchResults(query, data || []);
+  } catch (err) {
+    console.error('Erreur recherche exercice (autre sport) :', err);
+  }
+}
+
+function renderAutreExoSearchResults(query, matches) {
+  autreExoSearchResults.innerHTML = '';
+
+  matches.forEach((exo) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'w-full text-left px-4 py-2.5 text-sm hover:bg-fonte-panel border-b border-fonte-border last:border-b-0';
+    item.textContent = autreExoLabel(exo);
+    item.addEventListener('click', () => {
+      selectAutreExercice(exo);
+      autreExoSearchInput.value = '';
+      hideAutreSearchResults();
+    });
+    autreExoSearchResults.appendChild(item);
+  });
+
+  if (query.trim().length > 0) {
+    const createWrap = document.createElement('div');
+    createWrap.className = 'p-3 border-t border-fonte-border';
+    createWrap.innerHTML = `
+      <p class="text-xs font-mono text-fonte-muted mb-2">Créer un nouvel exercice pour « ${escapeHtml(query.trim())} » :</p>
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <input type="text" data-role="new-sport" placeholder="Sport (ex: Course à pied)"
+          class="bg-fonte-panel border border-fonte-border text-xs px-2 py-1.5 focus:outline-none focus:border-fonte-amber" />
+        <input type="text" data-role="new-nom" placeholder="Exercice (ex: Fractionné)" value="${escapeHtml(query.trim())}"
+          class="bg-fonte-panel border border-fonte-border text-xs px-2 py-1.5 focus:outline-none focus:border-fonte-amber" />
+      </div>
+      <div class="flex items-center gap-2 mb-2">
+        <input type="text" data-role="new-unite" placeholder="Unité de la métrique (ex: km, longueurs) — optionnel"
+          class="flex-1 bg-fonte-panel border border-fonte-border text-xs px-2 py-1.5 focus:outline-none focus:border-fonte-amber" />
+      </div>
+      <button type="button" data-role="confirm-create"
+        class="font-display uppercase tracking-wide text-xs px-3 py-1.5 bg-fonte-amber text-fonte-bg font-medium hover:bg-fonte-amberDark transition-colors">
+        Créer et sélectionner
+      </button>
+    `;
+    createWrap.querySelector('[data-role="confirm-create"]').addEventListener('click', () => {
+      const sport = createWrap.querySelector('[data-role="new-sport"]').value.trim();
+      const nom = createWrap.querySelector('[data-role="new-nom"]').value.trim();
+      const unite = createWrap.querySelector('[data-role="new-unite"]').value.trim();
+      if (!sport || !nom) {
+        autreSaveStatus.textContent = 'Le sport et le nom de l\'exercice sont obligatoires pour en créer un nouveau.';
+        return;
+      }
+      createExerciceAutreAndSelect(sport, nom, unite || null);
+    });
+    autreExoSearchResults.appendChild(createWrap);
+  }
+
+  autreExoSearchResults.classList.remove('hidden');
+}
+
+async function createExerciceAutreAndSelect(sport, nom, unite) {
+  try {
+    const { data, error } = await supabaseClient
+      .from('exercices_autres')
+      .insert({ sport, nom, unite })
+      .select()
+      .single();
+    if (error) throw error;
+    exercicesAutresLookup.set(data.id, data);
+    selectAutreExercice(data);
+    hideAutreSearchResults();
+  } catch (err) {
+    console.error('Erreur création exercice (autre sport) :', err);
+    if (err.code === '23505') {
+      autreSaveStatus.textContent = `« ${sport} — ${nom} » existe déjà : recherchez-le plutôt que de le recréer.`;
+    } else {
+      autreSaveStatus.textContent = "Échec de la création de l'exercice (voir console).";
+    }
+  }
+}
+
+function selectAutreExercice(exo) {
+  selectedAutreExercice = exo;
+  autreSelectedLabel.textContent = `Exercice sélectionné : ${autreExoLabel(exo)}`;
+  autreValeurUnite.textContent = exo.unite ? `(${exo.unite})` : '';
+}
+
+// --- Liste des entrées "autre sport" du jour ---
+function autreChipLabel(entry) {
+  return `${entry.exercice_label} · ${entry.duree_minutes} min`;
+}
+
+function renderAutreListBar() {
+  autreListBar.innerHTML = '';
+
+  autresOfDay.forEach((entry) => {
+    const isActive = currentAutreEntry && currentAutreEntry.id === entry.id;
+    const chipWrap = document.createElement('div');
+    chipWrap.className = 'flex items-stretch border transition-colors ' +
+      (isActive ? 'border-fonte-amber' : 'border-fonte-border hover:border-fonte-amber');
+
+    const chipLabel = document.createElement('button');
+    chipLabel.type = 'button';
+    chipLabel.className = 'font-mono text-xs px-3 py-1.5 ' + (isActive ? 'text-fonte-amber' : 'text-fonte-muted');
+    chipLabel.textContent = autreChipLabel(entry);
+    chipLabel.addEventListener('click', () => loadAutreEntryById(entry.id));
+    chipWrap.appendChild(chipLabel);
+
+    const chipDelete = document.createElement('button');
+    chipDelete.type = 'button';
+    chipDelete.className = 'px-2 text-fonte-muted hover:text-fonte-amber border-l border-fonte-border transition-colors leading-none';
+    chipDelete.textContent = '×';
+    chipDelete.title = 'Supprimer cette entrée';
+    chipDelete.addEventListener('click', (event) => {
+      event.stopPropagation();
+      deleteAutreEntry(entry.id);
+    });
+    chipWrap.appendChild(chipDelete);
+
+    autreListBar.appendChild(chipWrap);
+  });
+
+  const btnNew = document.createElement('button');
+  btnNew.type = 'button';
+  const isNewActive = currentAutreEntry && currentAutreEntry.id === null;
+  btnNew.className = 'font-mono text-xs px-3 py-1.5 border transition-colors ' +
+    (isNewActive
+      ? 'border-fonte-amber bg-fonte-amber text-fonte-bg font-medium'
+      : 'border-fonte-border text-fonte-text hover:border-fonte-amber');
+  btnNew.textContent = '+ Nouvelle entrée';
+  btnNew.addEventListener('click', () => startNewAutreEntry());
+  autreListBar.appendChild(btnNew);
+}
+
+async function refreshAutresOfDay() {
+  try {
+    const { data: seancesAutres, error } = await supabaseClient
+      .from('seances')
+      .select('id, duree_minutes')
+      .eq('date', currentDateKey)
+      .eq('type', 'autre');
+    if (error) throw error;
+
+    const seanceIds = (seancesAutres || []).map((s) => s.id);
+    if (seanceIds.length === 0) {
+      autresOfDay = [];
+      renderAutreListBar();
+      return;
+    }
+
+    const { data: rows, error: rowsError } = await supabaseClient
+      .from('autres_sports')
+      .select('*')
+      .in('seance_id', seanceIds);
+    if (rowsError) throw rowsError;
+
+    await ensureExercicesAutresLookup((rows || []).map((r) => r.exercice_autre_id));
+
+    autresOfDay = (rows || []).map((r) => {
+      const exo = exercicesAutresLookup.get(r.exercice_autre_id);
+      return {
+        id: r.seance_id,
+        autreRowId: r.id,
+        exercice_autre_id: r.exercice_autre_id,
+        exercice_label: exo ? autreExoLabel(exo) : '(exercice supprimé)',
+        exercice_unite: exo ? exo.unite : null,
+        duree_minutes: r.duree_minutes,
+        valeur_metrique: r.valeur_metrique,
+        notes: r.notes
+      };
+    });
+  } catch (err) {
+    console.error('Erreur chargement des autres sports du jour :', err);
+    autresOfDay = [];
+  }
+  renderAutreListBar();
+}
+
+function startNewAutreEntry() {
+  currentAutreEntry = null;
+  selectedAutreExercice = null;
+  autreSelectedLabel.textContent = 'Aucun exercice sélectionné.';
+  autreValeurUnite.textContent = '';
+  autreDureeInput.value = '';
+  autreValeurInput.value = '';
+  autreNotesInput.value = '';
+  autreSaveStatus.textContent = '';
+  btnDeleteAutre.classList.add('hidden');
+  renderAutreListBar();
+}
+
+function loadAutreEntryById(seanceId) {
+  const entry = autresOfDay.find((e) => e.id === seanceId);
+  if (!entry) return;
+
+  currentAutreEntry = entry;
+  const exo = exercicesAutresLookup.get(entry.exercice_autre_id);
+  selectedAutreExercice = exo || { id: entry.exercice_autre_id, sport: '', nom: entry.exercice_label, unite: entry.exercice_unite };
+  autreSelectedLabel.textContent = `Exercice sélectionné : ${entry.exercice_label}`;
+  autreValeurUnite.textContent = entry.exercice_unite ? `(${entry.exercice_unite})` : '';
+  autreDureeInput.value = entry.duree_minutes ?? '';
+  autreValeurInput.value = entry.valeur_metrique ?? '';
+  autreNotesInput.value = entry.notes || '';
+  autreSaveStatus.textContent = '';
+  btnDeleteAutre.classList.remove('hidden');
+  renderAutreListBar();
+}
+
+async function initAutreView() {
+  if (!currentDateKey) return; // pas encore initialisé côté musculation
+  await refreshAutresOfDay();
+  startNewAutreEntry();
+}
+
+btnSaveAutre.addEventListener('click', async () => {
+  if (!selectedAutreExercice) {
+    autreSaveStatus.textContent = 'Sélectionnez (ou créez) un exercice avant d\'enregistrer.';
+    return;
+  }
+  const duree = parseInt(autreDureeInput.value, 10);
+  if (!duree || duree <= 0) {
+    autreSaveStatus.textContent = 'La durée est obligatoire.';
+    return;
+  }
+  const valeur = autreValeurInput.value.trim() === '' ? null : parseFloat(autreValeurInput.value);
+  const notes = autreNotesInput.value.trim() || null;
+
+  autreSaveStatus.textContent = 'Enregistrement…';
+  try {
+    let seanceId = currentAutreEntry?.id || null;
+    const seancePayload = { date: currentDateKey, type: 'autre', duree_minutes: duree };
+
+    if (seanceId) {
+      const { error } = await supabaseClient.from('seances').update(seancePayload).eq('id', seanceId);
+      if (error) throw error;
+    } else {
+      const { data, error } = await supabaseClient.from('seances').insert(seancePayload).select().single();
+      if (error) throw error;
+      seanceId = data.id;
+    }
+
+    const autrePayload = {
+      seance_id: seanceId,
+      exercice_autre_id: selectedAutreExercice.id,
+      duree_minutes: duree,
+      valeur_metrique: valeur,
+      notes
+    };
+
+    if (currentAutreEntry?.autreRowId) {
+      const { error } = await supabaseClient.from('autres_sports').update(autrePayload).eq('id', currentAutreEntry.autreRowId);
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseClient.from('autres_sports').insert(autrePayload);
+      if (error) throw error;
+    }
+
+    autreSaveStatus.textContent = 'Entrée enregistrée.';
+    renderCalendar();
+    renderDaySummary();
+    await refreshAutresOfDay();
+    const saved = autresOfDay.find((e) => e.id === seanceId);
+    if (saved) loadAutreEntryById(saved.id);
+  } catch (err) {
+    console.error('Erreur enregistrement autre sport :', err);
+    autreSaveStatus.textContent = "Échec de l'enregistrement (voir console).";
+  }
+});
+
+btnDeleteAutre.addEventListener('click', () => {
+  if (currentAutreEntry?.id) deleteAutreEntry(currentAutreEntry.id);
+});
+
+async function deleteAutreEntry(seanceId) {
+  if (!window.confirm('Supprimer définitivement cette entrée ?')) return;
+  try {
+    // La suppression en cascade efface aussi la ligne "autres_sports" associée.
+    const { error } = await supabaseClient.from('seances').delete().eq('id', seanceId);
+    if (error) throw error;
+
+    renderCalendar();
+    renderDaySummary();
+    await refreshAutresOfDay();
+
+    if (currentAutreEntry && currentAutreEntry.id === seanceId) {
+      startNewAutreEntry();
+    } else {
+      renderAutreListBar();
+    }
+  } catch (err) {
+    console.error('Erreur suppression autre sport :', err);
+    autreSaveStatus.textContent = 'Échec de la suppression (voir console).';
+  }
+}
+
+// ---------------------------------------------------------
+// 6. Séances fétiches (modèles de séances)
 // ---------------------------------------------------------
 const WEEKDAY_KEYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']; // indexé sur Date.getDay()
 const JOUR_LABELS = {
@@ -1430,7 +1823,7 @@ btnLoadFetiche.addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------
-// 6. Timer de repos
+// 7. Timer de repos
 // ---------------------------------------------------------
 let restTimerInterval = null;
 let restTimerRemaining = 0;
@@ -1543,7 +1936,447 @@ btnRestClose.addEventListener('click', () => {
 loadFetichesCache();
 
 // ---------------------------------------------------------
-// 7. Export JSON
+// 8. Bilan hebdomadaire
+// ---------------------------------------------------------
+let bilanWeekStart = startOfWeek(new Date()); // toujours calculé à la volée : consultable pour n'importe quelle semaine, passée ou future
+let bilanFilter = 'tout'; // 'tout' | 'muscu' | 'autre'
+
+const bilanPeriodLabel = document.getElementById('bilan-period-label');
+const bilanFilterButtons = document.querySelectorAll('.bilan-filter-btn');
+const bilanTempsTotal = document.getElementById('bilan-temps-total');
+const bilanVolumeTotal = document.getElementById('bilan-volume-total');
+const bilanJoursBody = document.getElementById('bilan-jours-body');
+const bilanSportsDetail = document.getElementById('bilan-sports-detail');
+
+function formatDureeHM(totalMinutes) {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `${m} min`;
+  return `${h} h ${String(m).padStart(2, '0')}`;
+}
+
+function updateBilanFilterUI() {
+  bilanFilterButtons.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.bilanFilter === bilanFilter);
+  });
+}
+
+async function renderBilan() {
+  updateBilanFilterUI();
+  const weekEnd = new Date(bilanWeekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  bilanPeriodLabel.textContent = `${bilanWeekStart.getDate()} ${MOIS_NOMS[bilanWeekStart.getMonth()]} – ${weekEnd.getDate()} ${MOIS_NOMS[weekEnd.getMonth()]} ${weekEnd.getFullYear()}`;
+
+  const startKey = toDateKey(bilanWeekStart);
+  const endKey = toDateKey(weekEnd);
+
+  try {
+    // Temps par jour et par type, sur toute la semaine.
+    const { data: seancesSemaine, error } = await supabaseClient
+      .from('seances')
+      .select('date, type, duree_minutes')
+      .gte('date', startKey)
+      .lte('date', endKey);
+    if (error) throw error;
+
+    const parJour = new Map(); // dateKey -> { muscu: minutes, autre: minutes }
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(bilanWeekStart);
+      d.setDate(d.getDate() + i);
+      parJour.set(toDateKey(d), { muscu: 0, autre: 0 });
+    }
+    (seancesSemaine || []).forEach((s) => {
+      const entry = parJour.get(s.date);
+      if (!entry) return;
+      if (s.type === 'muscu') entry.muscu += s.duree_minutes || 0;
+      if (s.type === 'autre') entry.autre += s.duree_minutes || 0;
+    });
+
+    let totalMuscu = 0;
+    let totalAutre = 0;
+    parJour.forEach((v) => { totalMuscu += v.muscu; totalAutre += v.autre; });
+    const totalTout = totalMuscu + totalAutre;
+
+    const displayedTotal = bilanFilter === 'muscu' ? totalMuscu : bilanFilter === 'autre' ? totalAutre : totalTout;
+    bilanTempsTotal.textContent = formatDureeHM(displayedTotal);
+
+    // Tableau détail par jour
+    bilanJoursBody.innerHTML = '';
+    let cursor = new Date(bilanWeekStart);
+    for (let i = 0; i < 7; i++) {
+      const dateKey = toDateKey(cursor);
+      const v = parJour.get(dateKey);
+      const tr = document.createElement('tr');
+      tr.className = 'border-t border-fonte-border';
+      tr.innerHTML = `
+        <td class="py-1.5 pr-3">${JOURS_SEMAINE[(cursor.getDay() + 6) % 7]} ${cursor.getDate()}</td>
+        <td class="py-1.5 pr-3">${v.muscu ? formatDureeHM(v.muscu) : '—'}</td>
+        <td class="py-1.5 pr-3">${v.autre ? formatDureeHM(v.autre) : '—'}</td>
+        <td class="py-1.5 text-fonte-text">${(v.muscu + v.autre) ? formatDureeHM(v.muscu + v.autre) : '—'}</td>
+      `;
+      bilanJoursBody.appendChild(tr);
+      cursor = new Date(cursor);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    // Volume musculation (score = Σ reps × poids sur toutes les séries de la semaine)
+    const muscuSeanceIds = (seancesSemaine || []).filter((s) => s.type === 'muscu');
+    // On a besoin des id, pas seulement date/type : nouvelle requête ciblée.
+    const { data: seancesMuscuIds, error: idsError } = await supabaseClient
+      .from('seances')
+      .select('id')
+      .gte('date', startKey)
+      .lte('date', endKey)
+      .eq('type', 'muscu');
+    if (idsError) throw idsError;
+
+    let volumeTotal = 0;
+    const ids = (seancesMuscuIds || []).map((s) => s.id);
+    if (ids.length > 0) {
+      const { data: seriesSemaine, error: seriesError } = await supabaseClient
+        .from('series')
+        .select('poids_kg, reps')
+        .in('seance_id', ids);
+      if (seriesError) throw seriesError;
+      volumeTotal = (seriesSemaine || []).reduce((sum, s) => sum + (s.poids_kg || 0) * (s.reps || 0), 0);
+    }
+    bilanVolumeTotal.textContent = Math.round(volumeTotal).toLocaleString('fr-FR') + ' kg';
+
+    // Répartition des autres sports de la semaine
+    if (ids.length === 0 && totalAutre === 0) {
+      // rien à faire, message par défaut déjà en place plus bas
+    }
+    const { data: seancesAutresSemaine, error: autresIdsError } = await supabaseClient
+      .from('seances')
+      .select('id')
+      .gte('date', startKey)
+      .lte('date', endKey)
+      .eq('type', 'autre');
+    if (autresIdsError) throw autresIdsError;
+
+    const autreIds = (seancesAutresSemaine || []).map((s) => s.id);
+    if (autreIds.length === 0) {
+      bilanSportsDetail.textContent = 'Aucune donnée pour cette semaine.';
+    } else {
+      const { data: autresRows, error: autresRowsError } = await supabaseClient
+        .from('autres_sports')
+        .select('exercice_autre_id, duree_minutes')
+        .in('seance_id', autreIds);
+      if (autresRowsError) throw autresRowsError;
+
+      await ensureExercicesAutresLookup((autresRows || []).map((r) => r.exercice_autre_id));
+
+      const parSport = new Map(); // sport -> { minutes, count }
+      (autresRows || []).forEach((r) => {
+        const exo = exercicesAutresLookup.get(r.exercice_autre_id);
+        const sport = exo ? exo.sport : 'Autre';
+        const entry = parSport.get(sport) || { minutes: 0, count: 0 };
+        entry.minutes += r.duree_minutes || 0;
+        entry.count += 1;
+        parSport.set(sport, entry);
+      });
+
+      bilanSportsDetail.innerHTML = Array.from(parSport.entries())
+        .map(([sport, v]) => `<div class="mb-1"><span class="text-fonte-text">${escapeHtml(sport)}</span> — ${formatDureeHM(v.minutes)} (${v.count} séance${v.count > 1 ? 's' : ''})</div>`)
+        .join('');
+    }
+  } catch (err) {
+    console.error('Erreur calcul du bilan hebdomadaire :', err);
+    bilanTempsTotal.textContent = '—';
+    bilanVolumeTotal.textContent = '—';
+  }
+}
+
+document.getElementById('bilan-prev').addEventListener('click', () => {
+  bilanWeekStart.setDate(bilanWeekStart.getDate() - 7);
+  bilanWeekStart = new Date(bilanWeekStart);
+  renderBilan();
+});
+document.getElementById('bilan-next').addEventListener('click', () => {
+  bilanWeekStart.setDate(bilanWeekStart.getDate() + 7);
+  bilanWeekStart = new Date(bilanWeekStart);
+  renderBilan();
+});
+document.getElementById('bilan-today').addEventListener('click', () => {
+  bilanWeekStart = startOfWeek(new Date());
+  renderBilan();
+});
+bilanFilterButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    bilanFilter = btn.dataset.bilanFilter;
+    renderBilan();
+  });
+});
+
+document.querySelector('.tab-btn[data-tab="bilan"]').addEventListener('click', () => renderBilan());
+
+// ---------------------------------------------------------
+// 9. Suivi (graphiques de progression)
+// ---------------------------------------------------------
+let suiviSelection = []; // [{ kind: 'muscu'|'autre', id, label, unite? }]
+let suiviAllMuscu = [];
+let suiviAllAutres = [];
+const suiviChartInstances = new Map(); // clé "kind:id" -> instance Chart.js
+
+const suiviSearchInput = document.getElementById('suivi-search-input');
+const suiviSearchResults = document.getElementById('suivi-search-results');
+const suiviSelectedChips = document.getElementById('suivi-selected-chips');
+const suiviChartsContainer = document.getElementById('suivi-charts-container');
+const suiviEmptyHint = document.getElementById('suivi-empty-hint');
+
+async function loadSuiviCatalogue() {
+  try {
+    const [muscuRes, autresRes] = await Promise.all([
+      supabaseClient.from('exercices').select('*').order('nom'),
+      supabaseClient.from('exercices_autres').select('*').order('sport').order('nom')
+    ]);
+    if (muscuRes.error) throw muscuRes.error;
+    if (autresRes.error) throw autresRes.error;
+    suiviAllMuscu = muscuRes.data || [];
+    suiviAllAutres = autresRes.data || [];
+  } catch (err) {
+    console.error('Erreur chargement du catalogue Suivi :', err);
+  }
+}
+
+function hideSuiviResults() {
+  suiviSearchResults.classList.add('hidden');
+  suiviSearchResults.innerHTML = '';
+}
+
+let suiviSearchDebounce = null;
+suiviSearchInput.addEventListener('input', () => {
+  clearTimeout(suiviSearchDebounce);
+  const query = suiviSearchInput.value.trim().toLowerCase();
+  if (!query) {
+    hideSuiviResults();
+    return;
+  }
+  suiviSearchDebounce = setTimeout(() => renderSuiviSearchResults(query), 150);
+});
+
+document.addEventListener('click', (event) => {
+  if (!suiviSearchResults.contains(event.target) && event.target !== suiviSearchInput) {
+    hideSuiviResults();
+  }
+});
+
+function renderSuiviSearchResults(query) {
+  suiviSearchResults.innerHTML = '';
+
+  const muscuMatches = suiviAllMuscu.filter((e) => e.nom.toLowerCase().includes(query));
+  const autresMatches = suiviAllAutres.filter((e) => autreExoLabel(e).toLowerCase().includes(query));
+
+  if (muscuMatches.length === 0 && autresMatches.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'px-4 py-3 text-xs font-mono text-fonte-muted';
+    empty.textContent = 'Aucun exercice trouvé.';
+    suiviSearchResults.appendChild(empty);
+    suiviSearchResults.classList.remove('hidden');
+    return;
+  }
+
+  function addGroup(title, items, kind) {
+    if (items.length === 0) return;
+    const header = document.createElement('div');
+    header.className = 'px-4 py-1.5 text-[0.65rem] font-mono uppercase text-fonte-muted bg-fonte-panel sticky top-0';
+    header.textContent = title;
+    suiviSearchResults.appendChild(header);
+
+    items.forEach((item) => {
+      const label = kind === 'muscu' ? item.nom : autreExoLabel(item);
+      const already = suiviSelection.some((s) => s.kind === kind && s.id === item.id);
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'w-full text-left px-4 py-2 text-sm hover:bg-fonte-panel border-b border-fonte-border last:border-b-0 flex items-center justify-between' + (already ? ' opacity-40' : '');
+      row.innerHTML = `<span>${escapeHtml(label)}</span>${already ? '<span class="text-xs font-mono text-fonte-muted">déjà suivi</span>' : ''}`;
+      if (!already) {
+        row.addEventListener('click', () => {
+          addSuiviSelection(kind, item);
+          suiviSearchInput.value = '';
+          hideSuiviResults();
+        });
+      }
+      suiviSearchResults.appendChild(row);
+    });
+  }
+
+  addGroup('Musculation', muscuMatches, 'muscu');
+  addGroup('Autres sports', autresMatches, 'autre');
+  suiviSearchResults.classList.remove('hidden');
+}
+
+function addSuiviSelection(kind, item) {
+  const label = kind === 'muscu' ? item.nom : autreExoLabel(item);
+  suiviSelection.push({ kind, id: item.id, label, unite: item.unite || null });
+  renderSuiviChips();
+  renderSuiviCharts();
+}
+
+function removeSuiviSelection(kind, id) {
+  suiviSelection = suiviSelection.filter((s) => !(s.kind === kind && s.id === id));
+  const key = `${kind}:${id}`;
+  const chart = suiviChartInstances.get(key);
+  if (chart) {
+    chart.destroy();
+    suiviChartInstances.delete(key);
+  }
+  document.getElementById(`suivi-card-${kind}-${id}`)?.remove();
+  renderSuiviChips();
+  if (suiviSelection.length === 0) suiviEmptyHint.classList.remove('hidden');
+}
+
+function renderSuiviChips() {
+  suiviSelectedChips.innerHTML = '';
+  suiviSelection.forEach((s) => {
+    const chip = document.createElement('div');
+    chip.className = 'flex items-center gap-2 border border-fonte-amber text-fonte-amber text-xs font-mono px-3 py-1.5';
+    chip.innerHTML = `<span>${escapeHtml(s.label)}</span>`;
+    const btnX = document.createElement('button');
+    btnX.type = 'button';
+    btnX.className = 'leading-none hover:opacity-70';
+    btnX.textContent = '×';
+    btnX.addEventListener('click', () => removeSuiviSelection(s.kind, s.id));
+    chip.appendChild(btnX);
+    suiviSelectedChips.appendChild(chip);
+  });
+}
+
+async function renderSuiviCharts() {
+  if (suiviSelection.length === 0) {
+    suiviEmptyHint.classList.remove('hidden');
+    return;
+  }
+  suiviEmptyHint.classList.add('hidden');
+
+  for (const item of suiviSelection) {
+    const key = `${item.kind}:${item.id}`;
+    if (document.getElementById(`suivi-card-${item.kind}-${item.id}`)) continue; // déjà affiché
+
+    const card = document.createElement('div');
+    card.id = `suivi-card-${item.kind}-${item.id}`;
+    card.className = 'bg-fonte-panel border border-fonte-border p-4';
+    card.innerHTML = `
+      <h3 class="font-display text-sm uppercase tracking-wide mb-3">${escapeHtml(item.label)}</h3>
+      <div style="height: 260px;"><canvas></canvas></div>
+    `;
+    suiviChartsContainer.appendChild(card);
+    const canvas = card.querySelector('canvas');
+
+    if (item.kind === 'muscu') {
+      await drawMuscuChart(canvas, item, key);
+    } else {
+      await drawAutreChart(canvas, item, key);
+    }
+  }
+}
+
+async function drawMuscuChart(canvas, item, key) {
+  try {
+    const { data, error } = await supabaseClient
+      .from('series')
+      .select('poids_kg, reps, seances ( date )')
+      .eq('exercice_id', item.id);
+    if (error) throw error;
+
+    const parDate = new Map();
+    (data || []).forEach((s) => {
+      const date = s.seances?.date;
+      if (!date) return;
+      const entry = parDate.get(date) || { max: 0, volume: 0 };
+      entry.max = Math.max(entry.max, s.poids_kg || 0);
+      entry.volume += (s.poids_kg || 0) * (s.reps || 0);
+      parDate.set(date, entry);
+    });
+
+    const dates = Array.from(parDate.keys()).sort();
+    const chargeMax = dates.map((d) => parDate.get(d).max);
+    const volumes = dates.map((d) => parDate.get(d).volume);
+
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: dates,
+        datasets: [
+          { label: 'Charge max (kg)', data: chargeMax, borderColor: '#FF7A1F', backgroundColor: '#FF7A1F', tension: 0.2, yAxisID: 'y' },
+          { label: 'Volume (kg)', data: volumes, borderColor: '#4FA3C7', backgroundColor: '#4FA3C7', tension: 0.2, yAxisID: 'y1' }
+        ]
+      },
+      options: buildChartOptions('Charge max (kg)', 'Volume (kg)')
+    });
+    suiviChartInstances.set(key, chart);
+  } catch (err) {
+    console.error('Erreur graphique musculation :', err);
+  }
+}
+
+async function drawAutreChart(canvas, item, key) {
+  try {
+    const { data: rows, error } = await supabaseClient
+      .from('autres_sports')
+      .select('duree_minutes, valeur_metrique, seance_id')
+      .eq('exercice_autre_id', item.id);
+    if (error) throw error;
+
+    const seanceIds = (rows || []).map((r) => r.seance_id);
+    let datesById = new Map();
+    if (seanceIds.length > 0) {
+      const { data: seancesRows, error: seancesError } = await supabaseClient
+        .from('seances')
+        .select('id, date')
+        .in('id', seanceIds);
+      if (seancesError) throw seancesError;
+      (seancesRows || []).forEach((s) => datesById.set(s.id, s.date));
+    }
+
+    const points = (rows || [])
+      .map((r) => ({ date: datesById.get(r.seance_id), valeur: r.valeur_metrique, duree: r.duree_minutes }))
+      .filter((p) => p.date)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    const dates = points.map((p) => p.date);
+    const valeurs = points.map((p) => p.valeur);
+    const durees = points.map((p) => p.duree);
+
+    const chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: dates,
+        datasets: [
+          { label: `Métrique${item.unite ? ' (' + item.unite + ')' : ''}`, data: valeurs, borderColor: '#FF7A1F', backgroundColor: '#FF7A1F', tension: 0.2, yAxisID: 'y' },
+          { label: 'Durée (min)', data: durees, borderColor: '#4FA3C7', backgroundColor: '#4FA3C7', tension: 0.2, yAxisID: 'y1' }
+        ]
+      },
+      options: buildChartOptions(`Métrique${item.unite ? ' (' + item.unite + ')' : ''}`, 'Durée (min)')
+    });
+    suiviChartInstances.set(key, chart);
+  } catch (err) {
+    console.error('Erreur graphique autre sport :', err);
+  }
+}
+
+function buildChartOptions(leftLabel, rightLabel) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: '#F2F2F0', font: { family: 'IBM Plex Mono' } } }
+    },
+    scales: {
+      x: { ticks: { color: '#7A7A80' }, grid: { color: '#28282C' } },
+      y: { type: 'linear', position: 'left', title: { display: true, text: leftLabel, color: '#7A7A80' }, ticks: { color: '#7A7A80' }, grid: { color: '#28282C' } },
+      y1: { type: 'linear', position: 'right', title: { display: true, text: rightLabel, color: '#7A7A80' }, ticks: { color: '#7A7A80' }, grid: { display: false } }
+    }
+  };
+}
+
+document.querySelector('.tab-btn[data-tab="suivi"]').addEventListener('click', () => {
+  loadSuiviCatalogue();
+});
+
+// ---------------------------------------------------------
+// 10. Export JSON
 // ---------------------------------------------------------
 const exportStatus = document.getElementById('donnees-status');
 
@@ -1585,7 +2418,7 @@ async function exportAllData() {
 document.getElementById('btn-export').addEventListener('click', exportAllData);
 
 // ---------------------------------------------------------
-// 8. Import JSON
+// 11. Import JSON
 // ---------------------------------------------------------
 function readFileAsText(file) {
   return new Promise((resolve, reject) => {
