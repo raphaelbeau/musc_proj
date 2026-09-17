@@ -390,6 +390,7 @@ const btnTimerStop = document.getElementById('btn-timer-stop');
 const timerElapsed = document.getElementById('timer-elapsed');
 const manualDurationInput = document.getElementById('input-manual-duration');
 const btnSaveUpdates = document.getElementById('btn-save-updates');
+const btnDeleteSeance = document.getElementById('btn-delete-seance');
 const exoSearchInput = document.getElementById('exo-search-input');
 const exoSearchResults = document.getElementById('exo-search-results');
 const seanceExosList = document.getElementById('seance-exercices-list');
@@ -406,6 +407,7 @@ function resetTimerUI() {
   manualDurationInput.disabled = false;
   manualDurationInput.value = '';
   btnSaveUpdates.classList.add('hidden');
+  btnDeleteSeance.classList.add('hidden');
 }
 
 function updateElapsedDisplay() {
@@ -448,6 +450,10 @@ btnTimerStop.addEventListener('click', async () => {
 });
 
 btnSaveUpdates.addEventListener('click', () => saveSeance());
+
+btnDeleteSeance.addEventListener('click', () => {
+  if (currentSeance?.id) deleteSeance(currentSeance.id);
+});
 
 // --- Recherche / création d'exercice ---
 let searchDebounceTimer = null;
@@ -810,14 +816,30 @@ function renderSeanceListBar() {
   seanceListBar.innerHTML = '';
 
   seancesOfDay.forEach((s, index) => {
-    const chip = document.createElement('button');
-    chip.type = 'button';
     const isActive = currentSeance && currentSeance.id === s.id;
-    chip.className = 'font-mono text-xs px-3 py-1.5 border transition-colors ' +
-      (isActive ? 'border-fonte-amber text-fonte-amber' : 'border-fonte-border text-fonte-muted hover:border-fonte-amber');
-    chip.textContent = seanceChipLabel(s, index);
-    chip.addEventListener('click', () => loadSeanceById(s.id));
-    seanceListBar.appendChild(chip);
+    const chipWrap = document.createElement('div');
+    chipWrap.className = 'flex items-stretch border transition-colors ' +
+      (isActive ? 'border-fonte-amber' : 'border-fonte-border hover:border-fonte-amber');
+
+    const chipLabel = document.createElement('button');
+    chipLabel.type = 'button';
+    chipLabel.className = 'font-mono text-xs px-3 py-1.5 ' + (isActive ? 'text-fonte-amber' : 'text-fonte-muted');
+    chipLabel.textContent = seanceChipLabel(s, index);
+    chipLabel.addEventListener('click', () => loadSeanceById(s.id));
+    chipWrap.appendChild(chipLabel);
+
+    const chipDelete = document.createElement('button');
+    chipDelete.type = 'button';
+    chipDelete.className = 'px-2 text-fonte-muted hover:text-fonte-amber border-l border-fonte-border transition-colors leading-none';
+    chipDelete.textContent = '×';
+    chipDelete.title = 'Supprimer cette séance';
+    chipDelete.addEventListener('click', (event) => {
+      event.stopPropagation();
+      deleteSeance(s.id);
+    });
+    chipWrap.appendChild(chipDelete);
+
+    seanceListBar.appendChild(chipWrap);
   });
 
   const btnNew = document.createElement('button');
@@ -830,6 +852,30 @@ function renderSeanceListBar() {
   btnNew.textContent = '+ Nouvelle séance';
   btnNew.addEventListener('click', () => startNewSeance());
   seanceListBar.appendChild(btnNew);
+}
+
+// --- Suppression d'une séance (depuis une puce ou depuis le panneau principal) ---
+async function deleteSeance(seanceId) {
+  if (!window.confirm('Supprimer définitivement cette séance et toutes ses séries ?')) return;
+  try {
+    // La suppression en cascade (ON DELETE CASCADE dans schema.sql) efface aussi
+    // automatiquement les lignes "series" rattachées à cette séance.
+    const { error } = await supabaseClient.from('seances').delete().eq('id', seanceId);
+    if (error) throw error;
+
+    renderCalendar();
+    renderDaySummary();
+    await refreshSeancesOfDay();
+
+    if (currentSeance && currentSeance.id === seanceId) {
+      startNewSeance();
+    } else {
+      renderSeanceListBar();
+    }
+  } catch (err) {
+    console.error('Erreur suppression séance :', err);
+    seanceSaveStatus.textContent = 'Échec de la suppression (voir console).';
+  }
 }
 
 async function refreshSeancesOfDay() {
@@ -884,6 +930,7 @@ async function loadSeanceById(seanceId) {
   manualDurationInput.disabled = true;
   timerElapsed.textContent = existing.duree_minutes ? `${existing.duree_minutes} min (enregistrée)` : 'Enregistrée';
   btnSaveUpdates.classList.remove('hidden');
+  btnDeleteSeance.classList.remove('hidden');
 
   renderExercicesList();
   renderSeanceListBar();
@@ -950,6 +997,7 @@ async function saveSeance() {
 
     seanceSaveStatus.textContent = `Séance enregistrée (${rowsToInsert.length} série(s) sur ${currentSeance.exercices.length} exercice(s)).`;
     btnSaveUpdates.classList.remove('hidden');
+    btnDeleteSeance.classList.remove('hidden');
     manualDurationInput.disabled = true;
     // Les badges, le résumé du calendrier et la liste des séances du jour doivent
     // refléter cette sauvegarde (nouvelle séance ou mise à jour d'une existante).
