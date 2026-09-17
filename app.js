@@ -7,8 +7,8 @@
 // 0. CONFIGURATION — à renseigner avec les identifiants de votre projet Supabase
 //    (Project Settings > API dans le dashboard Supabase)
 // ---------------------------------------------------------
-const SUPABASE_URL = 'https://VOTRE-PROJET.supabase.co';
-const SUPABASE_ANON_KEY = 'VOTRE-CLE-ANON-PUBLIQUE';
+const SUPABASE_URL = 'https://bwpglzrnpurbsufyrzoz.supabase.co/rest/v1/';
+const SUPABASE_ANON_KEY = 'sb_publishable_7y1e1M0Dcy7B7k89G2eq1w_gegUKKcM';
 
 // Liste des tables gérées par l'application, dans un ORDRE DE DÉPENDANCE
 // (une table ne référence que des tables qui la précèdent dans cette liste).
