@@ -192,24 +192,25 @@ async function renderCalendar() {
   const cursor = new Date(start);
 
   while (cursor <= end) {
-    const dateKey = toDateKey(cursor);
+    const dayDate = new Date(cursor); // valeur figée pour cette itération, utilisée dans la closure du clic
+    const dateKey = toDateKey(dayDate);
     const dayEntry = indicators.get(dateKey);
-    const isOutside = window.appState.viewMode === 'month' && cursor.getMonth() !== currentMonth;
+    const isOutside = window.appState.viewMode === 'month' && dayDate.getMonth() !== currentMonth;
 
     const cell = document.createElement('button');
     cell.type = 'button';
-    cell.className = 'cal-day' + (isOutside ? ' outside' : '') + (isSameDay(cursor, today) ? ' today' : '') + (isSameDay(cursor, window.appState.selectedDate) ? ' selected' : '');
+    cell.className = 'cal-day' + (isOutside ? ' outside' : '') + (isSameDay(dayDate, today) ? ' today' : '') + (isSameDay(dayDate, window.appState.selectedDate) ? ' selected' : '');
     cell.dataset.date = dateKey;
 
     const num = document.createElement('span');
     num.className = 'cal-day-num font-mono text-sm';
-    num.textContent = cursor.getDate();
+    num.textContent = dayDate.getDate();
     cell.appendChild(num);
 
     if (window.appState.viewMode === 'week') {
       const label = document.createElement('span');
       label.className = 'text-[0.65rem] font-mono text-fonte-muted uppercase';
-      label.textContent = JOURS_SEMAINE[(cursor.getDay() + 6) % 7];
+      label.textContent = JOURS_SEMAINE[(dayDate.getDay() + 6) % 7];
       cell.insertBefore(label, num);
     }
 
@@ -228,10 +229,10 @@ async function renderCalendar() {
     cell.appendChild(dots);
 
     cell.addEventListener('click', () => {
-      window.appState.selectedDate = new Date(cursor);
+      window.appState.selectedDate = dayDate;
       // Si on clique un jour "hors mois", on recentre la vue sur son mois.
       if (isOutside) {
-        window.appState.viewDate = new Date(cursor);
+        window.appState.viewDate = new Date(dayDate);
       }
       renderCalendar();
       renderDaySummary();
@@ -383,6 +384,7 @@ let timerInterval = null;
 let timerStartRef = null;
 
 const seanceDateLabel = document.getElementById('seance-date-label');
+const seanceListBar = document.getElementById('seance-list-bar');
 const btnTimerStart = document.getElementById('btn-timer-start');
 const btnTimerStop = document.getElementById('btn-timer-stop');
 const timerElapsed = document.getElementById('timer-elapsed');
@@ -776,48 +778,109 @@ async function loadExistingSeries(seanceId) {
   currentSeance.exercices = Array.from(byExercice.values());
 }
 
-async function initSeanceView() {
-  resetTimerUI();
-  seanceSaveStatus.textContent = '';
-  const date = window.appState.selectedDate;
-  const dateKey = toDateKey(date);
-  seanceDateLabel.textContent = `Séance du ${formatDayTitle(date)}`;
+// --- Gestion de plusieurs séances de muscu possibles sur un même jour ---
+let currentDateKey = null;
+let seancesOfDay = [];
 
+function seanceChipLabel(seance, index) {
+  if (seance.heure_debut) {
+    const t = new Date(seance.heure_debut);
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm} · ${seance.duree_minutes ?? '?'} min`;
+  }
+  return `Séance ${index + 1} · ${seance.duree_minutes ?? '?'} min`;
+}
+
+function renderSeanceListBar() {
+  seanceListBar.innerHTML = '';
+
+  seancesOfDay.forEach((s, index) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    const isActive = currentSeance && currentSeance.id === s.id;
+    chip.className = 'font-mono text-xs px-3 py-1.5 border transition-colors ' +
+      (isActive ? 'border-fonte-amber text-fonte-amber' : 'border-fonte-border text-fonte-muted hover:border-fonte-amber');
+    chip.textContent = seanceChipLabel(s, index);
+    chip.addEventListener('click', () => loadSeanceById(s.id));
+    seanceListBar.appendChild(chip);
+  });
+
+  const btnNew = document.createElement('button');
+  btnNew.type = 'button';
+  const isNewActive = currentSeance && currentSeance.id === null;
+  btnNew.className = 'font-mono text-xs px-3 py-1.5 border transition-colors ' +
+    (isNewActive
+      ? 'border-fonte-amber bg-fonte-amber text-fonte-bg font-medium'
+      : 'border-fonte-border text-fonte-text hover:border-fonte-amber');
+  btnNew.textContent = '+ Nouvelle séance';
+  btnNew.addEventListener('click', () => startNewSeance());
+  seanceListBar.appendChild(btnNew);
+}
+
+async function refreshSeancesOfDay() {
   try {
-    const { data: existing, error } = await supabaseClient
+    const { data, error } = await supabaseClient
       .from('seances')
       .select('*')
-      .eq('date', dateKey)
+      .eq('date', currentDateKey)
       .eq('type', 'muscu')
-      .maybeSingle();
+      .order('heure_debut', { ascending: true });
     if (error) throw error;
-
-    if (existing) {
-      currentSeance = {
-        id: existing.id,
-        date: dateKey,
-        heure_debut: existing.heure_debut,
-        heure_fin: existing.heure_fin,
-        duree_minutes: existing.duree_minutes,
-        exercices: []
-      };
-      await loadExistingSeries(existing.id);
-      // Une séance déjà enregistrée est considérée comme terminée : le chrono
-      // ne se relance pas, mais les séries restent modifiables et ré-enregistrables.
-      btnTimerStart.disabled = true;
-      btnTimerStop.disabled = true;
-      manualDurationInput.disabled = true;
-      timerElapsed.textContent = existing.duree_minutes ? `${existing.duree_minutes} min (enregistrée)` : 'Enregistrée';
-      btnSaveUpdates.classList.remove('hidden');
-    } else {
-      currentSeance = { id: null, date: dateKey, heure_debut: null, heure_fin: null, duree_minutes: null, exercices: [] };
-    }
+    seancesOfDay = data || [];
   } catch (err) {
-    console.error('Erreur chargement séance existante :', err);
-    currentSeance = { id: null, date: dateKey, heure_debut: null, heure_fin: null, duree_minutes: null, exercices: [] };
+    console.error('Erreur chargement des séances du jour :', err);
+    seancesOfDay = [];
   }
+  renderSeanceListBar();
+}
+
+function startNewSeance() {
+  currentSeance = { id: null, date: currentDateKey, heure_debut: null, heure_fin: null, duree_minutes: null, exercices: [] };
+  resetTimerUI();
+  seanceSaveStatus.textContent = '';
+  renderExercicesList();
+  renderSeanceListBar();
+}
+
+async function loadSeanceById(seanceId) {
+  const existing = seancesOfDay.find((s) => s.id === seanceId);
+  if (!existing) return;
+
+  resetTimerUI();
+  seanceSaveStatus.textContent = '';
+  currentSeance = {
+    id: existing.id,
+    date: currentDateKey,
+    heure_debut: existing.heure_debut,
+    heure_fin: existing.heure_fin,
+    duree_minutes: existing.duree_minutes,
+    exercices: []
+  };
+  await loadExistingSeries(existing.id);
+
+  // Une séance déjà enregistrée est considérée comme terminée : le chrono
+  // ne se relance pas, mais les séries restent modifiables et ré-enregistrables.
+  btnTimerStart.disabled = true;
+  btnTimerStop.disabled = true;
+  manualDurationInput.disabled = true;
+  timerElapsed.textContent = existing.duree_minutes ? `${existing.duree_minutes} min (enregistrée)` : 'Enregistrée';
+  btnSaveUpdates.classList.remove('hidden');
 
   renderExercicesList();
+  renderSeanceListBar();
+}
+
+async function initSeanceView() {
+  const date = window.appState.selectedDate;
+  currentDateKey = toDateKey(date);
+  seanceDateLabel.textContent = `Séance du ${formatDayTitle(date)}`;
+
+  await refreshSeancesOfDay();
+  // On repart toujours sur une séance neuve en arrivant sur l'onglet : les séances
+  // déjà enregistrées restent accessibles via les puces ci-dessus, sans bloquer
+  // la possibilité d'en démarrer une nouvelle le même jour.
+  startNewSeance();
 }
 
 // --- Sauvegarde (appelée à la fin de la séance, ou depuis "Enregistrer les modifications") ---
@@ -870,9 +933,11 @@ async function saveSeance() {
     seanceSaveStatus.textContent = `Séance enregistrée (${rowsToInsert.length} série(s) sur ${currentSeance.exercices.length} exercice(s)).`;
     btnSaveUpdates.classList.remove('hidden');
     manualDurationInput.disabled = true;
-    // Les badges et le résumé du calendrier doivent refléter la nouvelle séance.
+    // Les badges, le résumé du calendrier et la liste des séances du jour doivent
+    // refléter cette sauvegarde (nouvelle séance ou mise à jour d'une existante).
     renderCalendar();
     renderDaySummary();
+    await refreshSeancesOfDay();
   } catch (err) {
     console.error('Erreur sauvegarde séance :', err);
     seanceSaveStatus.textContent = "Échec de l'enregistrement (voir console).";
