@@ -3,14 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-<title>Fonte</title>
-
-     <!-- Logo de l'onglet (Favicon) -->
-  <link rel="icon" type="image/png" href="Gemini_Generated_Image_d5unz6d5unz6d5un.jpg">
-
-  <!-- Lien vers le fichier manifest -->
-  <link rel="manifest" href="./manifest.json">
-     <meta name="theme-color" content="#000000">
+<title>Fonte — Suivi Sport &amp; Musculation</title>
 
 <!-- Polices : Oswald pour les titres (signalétique de salle de sport), Inter pour le texte courant,
      IBM Plex Mono pour toutes les valeurs numériques (poids, reps, chronos) -->
@@ -101,6 +94,9 @@
   .seance-sub-btn { color: #7A7A80; background: transparent; }
   .seance-sub-btn.active { color: #0A0A0B; background: #FF7A1F; }
   .seance-sub-panel.hidden { display: none; }
+
+  .lib-view-btn { color: #7A7A80; background: transparent; }
+  .lib-view-btn.active { color: #0A0A0B; background: #FF7A1F; }
 
   /* --- Modale (Fétiches) --- */
   .modal-overlay {
@@ -487,6 +483,23 @@
       </div>
 
       <p id="donnees-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem]"></p>
+
+      <hr class="border-fonte-border my-5" />
+
+      <h3 class="font-display text-sm uppercase tracking-wide mb-3">Bibliothèque d'exercices</h3>
+      <p class="text-xs font-mono text-fonte-muted mb-3">
+        Renommez, changez l'unité de charge, ou supprimez un exercice de l'application entière.
+      </p>
+
+      <div class="flex border border-fonte-border text-xs font-display uppercase tracking-wide w-fit mb-3">
+        <button data-lib-view="muscu" class="lib-view-btn px-3 py-1.5 transition-colors">Musculation</button>
+        <button data-lib-view="autre" class="lib-view-btn px-3 py-1.5 transition-colors border-l border-fonte-border">Autres sports</button>
+      </div>
+
+      <div id="lib-muscu-list" class="space-y-2 max-h-64 overflow-y-auto"></div>
+      <div id="lib-autre-list" class="space-y-2 max-h-64 overflow-y-auto hidden"></div>
+
+      <p id="lib-status" class="text-xs font-mono text-fonte-muted min-h-[1.25rem] mt-2"></p>
     </div>
   </div>
 
