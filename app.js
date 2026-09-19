@@ -2582,9 +2582,40 @@ function renderLibMuscuList(rows) {
         exercicesLookup.delete(exo.id);
         libStatus.textContent = `« ${exo.nom} » supprimé.`;
         loadLibMuscuList();
+        return;
       } catch (err) {
-        console.error('Erreur suppression exercice :', err);
-        libStatus.textContent = friendlyDeleteError(err, 'Échec de la suppression (voir console).');
+        if (err.code !== '23503') {
+          console.error('Erreur suppression exercice :', err);
+          libStatus.textContent = friendlyDeleteError(err, 'Échec de la suppression (voir console).');
+          return;
+        }
+      }
+
+      // Bloqué par l'historique : on propose une suppression forcée (exercice de test, etc.),
+      // avec un second avertissement explicite car c'est irréversible.
+      const forceIt = window.confirm(
+        `« ${exo.nom} » a des séries enregistrées dans son historique.\n\n` +
+        `Supprimer aussi TOUTES ces séries pour pouvoir supprimer l'exercice ? Cette action est irréversible et effacera cette partie de votre historique de séances.`
+      );
+      if (!forceIt) {
+        libStatus.textContent = 'Suppression annulée.';
+        return;
+      }
+
+      libStatus.textContent = 'Suppression de l\'historique puis de l\'exercice…';
+      try {
+        const { error: seriesError } = await supabaseClient.from('series').delete().eq('exercice_id', exo.id);
+        if (seriesError) throw seriesError;
+        const { error: exoError } = await supabaseClient.from('exercices').delete().eq('id', exo.id);
+        if (exoError) throw exoError;
+        exercicesLookup.delete(exo.id);
+        libStatus.textContent = `« ${exo.nom} » et son historique de séries ont été supprimés.`;
+        loadLibMuscuList();
+        renderCalendar();
+        renderDaySummary();
+      } catch (err) {
+        console.error('Erreur suppression forcée de l\'exercice :', err);
+        libStatus.textContent = 'Échec de la suppression forcée (voir console).';
       }
     });
     row.appendChild(btnDelete);
