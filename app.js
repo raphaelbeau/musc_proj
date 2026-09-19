@@ -91,7 +91,11 @@ seanceSubButtons[0]?.classList.add('active');
 
 // --- Modale Paramètres (icône engrenage) ---
 const settingsModal = document.getElementById('settings-modal');
-document.getElementById('btn-open-settings').addEventListener('click', () => settingsModal.classList.remove('hidden'));
+document.getElementById('btn-open-settings').addEventListener('click', () => {
+  settingsModal.classList.remove('hidden');
+  loadLibMuscuList();
+  loadLibAutreList();
+});
 document.getElementById('btn-close-settings-modal').addEventListener('click', () => settingsModal.classList.add('hidden'));
 settingsModal.addEventListener('click', (event) => {
   if (event.target === settingsModal) settingsModal.classList.add('hidden');
@@ -932,7 +936,6 @@ function startNewSeance() {
   updateSeanceReposLabel();
   renderExercicesList();
   renderSeanceListBar();
-  maybeAutoLoadFetiche();
 }
 
 async function loadSeanceById(seanceId) {
@@ -978,6 +981,10 @@ async function initSeanceView() {
   // déjà enregistrées restent accessibles via les puces ci-dessus, sans bloquer
   // la possibilité d'en démarrer une nouvelle le même jour.
   startNewSeance();
+  // L'auto-chargement de la fétiche du jour n'a lieu qu'ici (arrivée sur l'onglet),
+  // jamais lors d'un clic manuel sur "+ Nouvelle séance", pour ne pas remplir une
+  // séance que l'utilisateur voulait justement laisser vide.
+  maybeAutoLoadFetiche();
 }
 
 // --- Sauvegarde (appelée à la fin de la séance, ou depuis "Enregistrer les modifications") ---
@@ -2465,3 +2472,221 @@ document.getElementById('input-import').addEventListener('change', (event) => {
   if (file) importAllData(file);
   event.target.value = ''; // permet de réimporter le même fichier deux fois de suite si besoin
 });
+
+// ---------------------------------------------------------
+// 12. Bibliothèque d'exercices (édition & suppression globales)
+// ---------------------------------------------------------
+const libMuscuList = document.getElementById('lib-muscu-list');
+const libAutreList = document.getElementById('lib-autre-list');
+const libStatus = document.getElementById('lib-status');
+const libViewButtons = document.querySelectorAll('.lib-view-btn');
+
+libViewButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    libViewButtons.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    const target = btn.dataset.libView;
+    libMuscuList.classList.toggle('hidden', target !== 'muscu');
+    libAutreList.classList.toggle('hidden', target !== 'autre');
+  });
+});
+libViewButtons[0]?.classList.add('active');
+
+function friendlyDeleteError(err, fallback) {
+  if (err.code === '23503') {
+    return 'Impossible de supprimer : cet exercice a déjà des séances enregistrées dans son historique. Vous pouvez le renommer ou changer son unité, mais pas le supprimer tant que cet historique existe.';
+  }
+  if (err.code === '23505') {
+    return 'Un exercice porte déjà ce nom : choisissez-en un autre.';
+  }
+  return fallback;
+}
+
+// --- Musculation ---
+async function loadLibMuscuList() {
+  libMuscuList.innerHTML = '<p class="text-xs font-mono text-fonte-muted">Chargement…</p>';
+  try {
+    const { data, error } = await supabaseClient.from('exercices').select('*').order('nom');
+    if (error) throw error;
+    renderLibMuscuList(data || []);
+  } catch (err) {
+    console.error('Erreur chargement bibliothèque musculation :', err);
+    libMuscuList.innerHTML = '<p class="text-xs font-mono text-fonte-muted">Erreur de chargement.</p>';
+  }
+}
+
+function renderLibMuscuList(rows) {
+  libMuscuList.innerHTML = '';
+  if (rows.length === 0) {
+    libMuscuList.innerHTML = '<p class="text-xs font-mono text-fonte-muted">Aucun exercice.</p>';
+    return;
+  }
+
+  rows.forEach((exo) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 bg-fonte-panel2 border border-fonte-border px-3 py-2';
+
+    const nomInput = document.createElement('input');
+    nomInput.type = 'text';
+    nomInput.value = exo.nom;
+    nomInput.className = 'flex-1 min-w-0 bg-transparent text-sm focus:outline-none border-b border-transparent focus:border-fonte-amber';
+    row.appendChild(nomInput);
+
+    const uniteSelect = document.createElement('select');
+    uniteSelect.className = 'bg-fonte-panel border border-fonte-border text-xs font-mono px-2 py-1 focus:outline-none focus:border-fonte-amber';
+    uniteSelect.innerHTML = `
+      <option value="total">Total</option>
+      <option value="par_cote">Par côté</option>
+    `;
+    uniteSelect.value = exo.unite_charge;
+    row.appendChild(uniteSelect);
+
+    const btnSave = document.createElement('button');
+    btnSave.type = 'button';
+    btnSave.className = 'font-mono text-xs px-2.5 py-1.5 border border-fonte-border hover:border-fonte-amber transition-colors shrink-0';
+    btnSave.textContent = 'Enregistrer';
+    btnSave.addEventListener('click', async () => {
+      const nom = nomInput.value.trim();
+      if (!nom) {
+        libStatus.textContent = 'Le nom ne peut pas être vide.';
+        return;
+      }
+      libStatus.textContent = 'Enregistrement…';
+      try {
+        const { data, error } = await supabaseClient
+          .from('exercices')
+          .update({ nom, unite_charge: uniteSelect.value })
+          .eq('id', exo.id)
+          .select()
+          .single();
+        if (error) throw error;
+        exercicesLookup.set(exo.id, data);
+        libStatus.textContent = `« ${nom} » mis à jour.`;
+      } catch (err) {
+        console.error('Erreur mise à jour exercice :', err);
+        libStatus.textContent = friendlyDeleteError(err, "Échec de la mise à jour (voir console).");
+      }
+    });
+    row.appendChild(btnSave);
+
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'font-mono text-xs px-2.5 py-1.5 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors shrink-0';
+    btnDelete.textContent = 'Supprimer';
+    btnDelete.addEventListener('click', async () => {
+      if (!window.confirm(`Supprimer définitivement « ${exo.nom} » de la bibliothèque ?`)) return;
+      libStatus.textContent = 'Suppression…';
+      try {
+        const { error } = await supabaseClient.from('exercices').delete().eq('id', exo.id);
+        if (error) throw error;
+        exercicesLookup.delete(exo.id);
+        libStatus.textContent = `« ${exo.nom} » supprimé.`;
+        loadLibMuscuList();
+      } catch (err) {
+        console.error('Erreur suppression exercice :', err);
+        libStatus.textContent = friendlyDeleteError(err, 'Échec de la suppression (voir console).');
+      }
+    });
+    row.appendChild(btnDelete);
+
+    libMuscuList.appendChild(row);
+  });
+}
+
+// --- Autres sports ---
+async function loadLibAutreList() {
+  libAutreList.innerHTML = '<p class="text-xs font-mono text-fonte-muted">Chargement…</p>';
+  try {
+    const { data, error } = await supabaseClient.from('exercices_autres').select('*').order('sport').order('nom');
+    if (error) throw error;
+    renderLibAutreList(data || []);
+  } catch (err) {
+    console.error('Erreur chargement bibliothèque autres sports :', err);
+    libAutreList.innerHTML = '<p class="text-xs font-mono text-fonte-muted">Erreur de chargement.</p>';
+  }
+}
+
+function renderLibAutreList(rows) {
+  libAutreList.innerHTML = '';
+  if (rows.length === 0) {
+    libAutreList.innerHTML = '<p class="text-xs font-mono text-fonte-muted">Aucun exercice.</p>';
+    return;
+  }
+
+  rows.forEach((exo) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 bg-fonte-panel2 border border-fonte-border px-3 py-2 flex-wrap';
+
+    const sportInput = document.createElement('input');
+    sportInput.type = 'text';
+    sportInput.value = exo.sport;
+    sportInput.placeholder = 'Sport';
+    sportInput.className = 'flex-1 min-w-[6rem] bg-transparent text-sm focus:outline-none border-b border-transparent focus:border-fonte-amber';
+    row.appendChild(sportInput);
+
+    const nomInput = document.createElement('input');
+    nomInput.type = 'text';
+    nomInput.value = exo.nom;
+    nomInput.placeholder = 'Exercice';
+    nomInput.className = 'flex-1 min-w-[6rem] bg-transparent text-sm focus:outline-none border-b border-transparent focus:border-fonte-amber';
+    row.appendChild(nomInput);
+
+    const uniteInput = document.createElement('input');
+    uniteInput.type = 'text';
+    uniteInput.value = exo.unite || '';
+    uniteInput.placeholder = 'Unité';
+    uniteInput.className = 'w-20 bg-transparent text-xs font-mono focus:outline-none border-b border-transparent focus:border-fonte-amber';
+    row.appendChild(uniteInput);
+
+    const btnSave = document.createElement('button');
+    btnSave.type = 'button';
+    btnSave.className = 'font-mono text-xs px-2.5 py-1.5 border border-fonte-border hover:border-fonte-amber transition-colors shrink-0';
+    btnSave.textContent = 'Enregistrer';
+    btnSave.addEventListener('click', async () => {
+      const sport = sportInput.value.trim();
+      const nom = nomInput.value.trim();
+      if (!sport || !nom) {
+        libStatus.textContent = 'Le sport et le nom sont obligatoires.';
+        return;
+      }
+      libStatus.textContent = 'Enregistrement…';
+      try {
+        const { data, error } = await supabaseClient
+          .from('exercices_autres')
+          .update({ sport, nom, unite: uniteInput.value.trim() || null })
+          .eq('id', exo.id)
+          .select()
+          .single();
+        if (error) throw error;
+        exercicesAutresLookup.set(exo.id, data);
+        libStatus.textContent = `« ${sport} — ${nom} » mis à jour.`;
+      } catch (err) {
+        console.error('Erreur mise à jour exercice (autre sport) :', err);
+        libStatus.textContent = friendlyDeleteError(err, "Échec de la mise à jour (voir console).");
+      }
+    });
+    row.appendChild(btnSave);
+
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'font-mono text-xs px-2.5 py-1.5 border border-fonte-border text-fonte-muted hover:text-fonte-amber hover:border-fonte-amber transition-colors shrink-0';
+    btnDelete.textContent = 'Supprimer';
+    btnDelete.addEventListener('click', async () => {
+      if (!window.confirm(`Supprimer définitivement « ${exo.sport} — ${exo.nom} » de la bibliothèque ? Les entrées déjà enregistrées avec cet exercice seront conservées mais afficheront "exercice supprimé".`)) return;
+      libStatus.textContent = 'Suppression…';
+      try {
+        const { error } = await supabaseClient.from('exercices_autres').delete().eq('id', exo.id);
+        if (error) throw error;
+        exercicesAutresLookup.delete(exo.id);
+        libStatus.textContent = `« ${exo.sport} — ${exo.nom} » supprimé.`;
+        loadLibAutreList();
+      } catch (err) {
+        console.error('Erreur suppression exercice (autre sport) :', err);
+        libStatus.textContent = friendlyDeleteError(err, 'Échec de la suppression (voir console).');
+      }
+    });
+    row.appendChild(btnDelete);
+
+    libAutreList.appendChild(row);
+  });
+}
