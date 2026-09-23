@@ -389,6 +389,54 @@ renderDaySummary();
 // ---------------------------------------------------------
 // 4. Séance de musculation (saisie d'une séance)
 // ---------------------------------------------------------
+
+// --- Brouillon local (localStorage) : évite de perdre une séance en cours de
+// saisie (pas encore "Terminée") en cas de rechargement de page accidentel,
+// de redémarrage du navigateur, etc. Ne concerne que les séances pas encore
+// enregistrées côté Supabase (id === null) ; une fois "Terminer" cliqué avec
+// succès, le brouillon local est effacé car la donnée est en sécurité en base.
+function draftKey(dateKey) {
+  return `fonte-draft-muscu-${dateKey}`;
+}
+
+function saveDraftNow() {
+  if (!currentSeance || currentSeance.id !== null || !currentDateKey) return;
+  try {
+    localStorage.setItem(draftKey(currentDateKey), JSON.stringify({
+      exercices: currentSeance.exercices,
+      reposDefaultSecondes: currentSeance.reposDefaultSecondes,
+      heure_debut: currentSeance.heure_debut,
+      savedAt: new Date().toISOString()
+    }));
+  } catch (err) {
+    console.error('Erreur sauvegarde brouillon local :', err);
+  }
+}
+
+let draftSaveTimer = null;
+function scheduleDraftSave() {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(saveDraftNow, 500);
+}
+
+function loadDraft(dateKey) {
+  try {
+    const raw = localStorage.getItem(draftKey(dateKey));
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    console.error('Erreur lecture brouillon local :', err);
+    return null;
+  }
+}
+
+function clearDraft(dateKey) {
+  try {
+    localStorage.removeItem(draftKey(dateKey));
+  } catch (err) {
+    console.error('Erreur suppression brouillon local :', err);
+  }
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -455,6 +503,7 @@ btnTimerStart.addEventListener('click', () => {
   btnTimerStart.disabled = true;
   manualDurationInput.disabled = true;
   manualDurationInput.value = '';
+  scheduleDraftSave();
 });
 
 btnTimerStop.addEventListener('click', async () => {
@@ -603,6 +652,7 @@ function addExerciseToSession(exo) {
     series: defaultSeriesSet()
   });
   renderExercicesList();
+  scheduleDraftSave();
 }
 
 // --- Historique (3 dernières séances sur un exercice) ---
@@ -673,7 +723,7 @@ function buildSerieRow(exo, serie, refreshRows) {
   poidsInput.step = '0.5';
   poidsInput.value = serie.poids_kg;
   poidsInput.className = 'w-20 bg-fonte-panel2 border border-fonte-border text-sm font-mono px-2 py-1 focus:outline-none focus:border-fonte-amber';
-  poidsInput.addEventListener('input', () => { serie.poids_kg = parseFloat(poidsInput.value) || 0; });
+  poidsInput.addEventListener('input', () => { serie.poids_kg = parseFloat(poidsInput.value) || 0; scheduleDraftSave(); });
   row.appendChild(poidsInput);
 
   const kgLabel = document.createElement('span');
@@ -686,7 +736,7 @@ function buildSerieRow(exo, serie, refreshRows) {
   repsInput.min = '0';
   repsInput.value = serie.reps;
   repsInput.className = 'w-16 bg-fonte-panel2 border border-fonte-border text-sm font-mono px-2 py-1 focus:outline-none focus:border-fonte-amber';
-  repsInput.addEventListener('input', () => { serie.reps = parseInt(repsInput.value, 10) || 0; });
+  repsInput.addEventListener('input', () => { serie.reps = parseInt(repsInput.value, 10) || 0; scheduleDraftSave(); });
   row.appendChild(repsInput);
 
   const repsLabel = document.createElement('span');
@@ -715,6 +765,7 @@ function buildSerieRow(exo, serie, refreshRows) {
   btnRemove.addEventListener('click', () => {
     exo.series = exo.series.filter((s) => s !== serie);
     refreshRows();
+    scheduleDraftSave();
   });
   actionsWrap.appendChild(btnRemove);
   row.appendChild(actionsWrap);
@@ -777,6 +828,7 @@ function buildExerciceBlock(exo) {
   btnAddSerie.addEventListener('click', () => {
     exo.series.push({ localId: makeLocalId(), id: null, type: 'standard', poids_kg: 0, reps: 0 });
     refreshRows();
+    scheduleDraftSave();
   });
 
   const btnAddEchec = document.createElement('button');
@@ -786,6 +838,7 @@ function buildExerciceBlock(exo) {
   btnAddEchec.addEventListener('click', () => {
     exo.series.push({ localId: makeLocalId(), id: null, type: 'echec', poids_kg: 0, reps: 0 });
     refreshRows();
+    scheduleDraftSave();
   });
 
   btnRow.appendChild(btnAddSerie);
@@ -801,6 +854,7 @@ function buildExerciceBlock(exo) {
   btnRemoveExo.addEventListener('click', () => {
     currentSeance.exercices = currentSeance.exercices.filter((e) => e !== exo);
     renderExercicesList();
+    scheduleDraftSave();
   });
 
   return wrap;
@@ -884,7 +938,7 @@ function renderSeanceListBar() {
       ? 'border-fonte-amber bg-fonte-amber text-fonte-bg font-medium'
       : 'border-fonte-border text-fonte-text hover:border-fonte-amber');
   btnNew.textContent = '+ Nouvelle séance';
-  btnNew.addEventListener('click', () => startNewSeance());
+  btnNew.addEventListener('click', () => startNewSeance(true));
   seanceListBar.appendChild(btnNew);
 }
 
@@ -902,7 +956,7 @@ async function deleteSeance(seanceId) {
     await refreshSeancesOfDay();
 
     if (currentSeance && currentSeance.id === seanceId) {
-      startNewSeance();
+      startNewSeance(true);
     } else {
       renderSeanceListBar();
     }
@@ -929,7 +983,8 @@ async function refreshSeancesOfDay() {
   renderSeanceListBar();
 }
 
-function startNewSeance() {
+function startNewSeance(discardDraft) {
+  if (discardDraft && currentDateKey) clearDraft(currentDateKey);
   currentSeance = { id: null, date: currentDateKey, heure_debut: null, heure_fin: null, duree_minutes: null, exercices: [], reposDefaultSecondes: 90 };
   resetTimerUI();
   seanceSaveStatus.textContent = '';
@@ -981,10 +1036,34 @@ async function initSeanceView() {
   // déjà enregistrées restent accessibles via les puces ci-dessus, sans bloquer
   // la possibilité d'en démarrer une nouvelle le même jour.
   startNewSeance();
-  // L'auto-chargement de la fétiche du jour n'a lieu qu'ici (arrivée sur l'onglet),
-  // jamais lors d'un clic manuel sur "+ Nouvelle séance", pour ne pas remplir une
-  // séance que l'utilisateur voulait justement laisser vide.
-  maybeAutoLoadFetiche();
+
+  // Un brouillon local (séance en cours, pas encore "Terminée") a-t-il été
+  // laissé sur ce jour par une session précédente (rechargement de page,
+  // redémarrage du navigateur...) ? Si oui, on le restaure en priorité et on
+  // n'auto-charge pas la fétiche par-dessus.
+  const draft = loadDraft(currentDateKey);
+  if (draft && Array.isArray(draft.exercices) && draft.exercices.length > 0) {
+    currentSeance.exercices = draft.exercices;
+    currentSeance.reposDefaultSecondes = draft.reposDefaultSecondes || 90;
+    currentSeance.heure_debut = draft.heure_debut || null;
+    updateSeanceReposLabel();
+    renderExercicesList();
+    seanceSaveStatus.textContent = 'Brouillon restauré automatiquement (séance retrouvée après une fermeture/rechargement).';
+
+    if (draft.heure_debut) {
+      timerStartRef = new Date(draft.heure_debut);
+      clearInterval(timerInterval);
+      timerInterval = setInterval(updateElapsedDisplay, 1000);
+      updateElapsedDisplay();
+      btnTimerStart.disabled = true;
+      manualDurationInput.disabled = true;
+    }
+  } else {
+    // L'auto-chargement de la fétiche du jour n'a lieu qu'ici (arrivée sur l'onglet,
+    // sans brouillon en attente), jamais lors d'un clic manuel sur "+ Nouvelle séance",
+    // pour ne pas remplir une séance que l'utilisateur voulait justement laisser vide.
+    maybeAutoLoadFetiche();
+  }
 }
 
 // --- Sauvegarde (appelée à la fin de la séance, ou depuis "Enregistrer les modifications") ---
@@ -1038,6 +1117,7 @@ async function saveSeance() {
     btnSaveUpdates.classList.remove('hidden');
     btnDeleteSeance.classList.remove('hidden');
     manualDurationInput.disabled = true;
+    clearDraft(currentSeance.date); // la donnée est désormais en sécurité en base
     // Les badges, le résumé du calendrier et la liste des séances du jour doivent
     // refléter cette sauvegarde (nouvelle séance ou mise à jour d'une existante).
     renderCalendar();
@@ -1810,6 +1890,7 @@ async function applyFeticheToSession(fetiche, isAuto) {
   }
 
   renderExercicesList();
+  scheduleDraftSave();
   seanceSaveStatus.textContent = isAuto
     ? `Fétiche « ${fetiche.nom} » chargée automatiquement (jour par défaut) — ${addedCount} exercice(s) ajouté(s).`
     : `Fétiche « ${fetiche.nom} » chargée — ${addedCount} exercice(s) ajouté(s).`;
