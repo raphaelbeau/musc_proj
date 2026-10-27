@@ -2351,6 +2351,7 @@ async function renderSuiviCharts() {
     card.innerHTML = `
       <h3 class="font-display text-sm uppercase tracking-wide mb-3">${escapeHtml(item.label)}</h3>
       <div style="height: 260px;"><canvas></canvas></div>
+      <div data-role="detail" class="mt-3 text-xs font-mono text-fonte-muted">Cliquez sur un point du graphique pour voir le détail du volume ce jour-là.</div>
     `;
     suiviChartsContainer.appendChild(card);
     const canvas = card.querySelector('canvas');
