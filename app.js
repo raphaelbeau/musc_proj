@@ -2368,7 +2368,7 @@ async function drawMuscuChart(canvas, item, key) {
   try {
     const { data, error } = await supabaseClient
       .from('series')
-      .select('poids_kg, reps, seances ( date )')
+      .select('poids_kg, reps, type, ordre, seance_id, seances ( date, heure_debut )')
       .eq('exercice_id', item.id);
     if (error) throw error;
 
@@ -2376,15 +2376,35 @@ async function drawMuscuChart(canvas, item, key) {
     (data || []).forEach((s) => {
       const date = s.seances?.date;
       if (!date) return;
-      const entry = parDate.get(date) || { max: 0, volume: 0 };
+      const entry = parDate.get(date) || { max: 0, volume: 0, series: [] };
       entry.max = Math.max(entry.max, s.poids_kg || 0);
       entry.volume += (s.poids_kg || 0) * (s.reps || 0);
+      entry.series.push({
+        poids_kg: s.poids_kg || 0,
+        reps: s.reps || 0,
+        type: s.type,
+        ordre: s.ordre || 0,
+        seance_id: s.seance_id,
+        debut: s.seances?.heure_debut || ''
+      });
       parDate.set(date, entry);
     });
 
     const dates = Array.from(parDate.keys()).sort();
     const chargeMax = dates.map((d) => parDate.get(d).max);
     const volumes = dates.map((d) => parDate.get(d).volume);
+    const detailEl = canvas.closest('[id^="suivi-card-"]').querySelector('[data-role="detail"]');
+
+    const options = buildChartOptions('Charge max (kg)', 'Volume (kg)');
+    // Clic (ou tap sur mobile) n'importe où à la hauteur d'un jour => détail de ce jour.
+    options.onClick = (evt, elements) => {
+      if (!elements.length) return;
+      const date = dates[elements[0].index];
+      showVolumeDetail(detailEl, date, parDate.get(date));
+    };
+    options.onHover = (evt, elements) => {
+      evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+    };
 
     const chart = new Chart(canvas, {
       type: 'line',
@@ -2395,12 +2415,54 @@ async function drawMuscuChart(canvas, item, key) {
           { label: 'Volume (kg)', data: volumes, borderColor: '#4FA3C7', backgroundColor: '#4FA3C7', tension: 0.2, yAxisID: 'y1' }
         ]
       },
-      options: buildChartOptions('Charge max (kg)', 'Volume (kg)')
+      options
     });
     suiviChartInstances.set(key, chart);
   } catch (err) {
     console.error('Erreur graphique musculation :', err);
   }
+}
+
+// Affiche, sous le graphique, les séries qui composent le volume d'un jour précis.
+function showVolumeDetail(detailEl, dateStr, entry) {
+  const fmt = (n) => Math.round(n * 100) / 100;
+  const [y, m, d] = dateStr.split('-').map(Number);
+
+  // Ordre chronologique si plusieurs séances le même jour, puis ordre des séries.
+  const series = [...entry.series].sort((a, b) =>
+    a.debut !== b.debut ? (a.debut < b.debut ? -1 : 1)
+    : a.seance_id !== b.seance_id ? String(a.seance_id).localeCompare(String(b.seance_id))
+    : a.ordre - b.ordre
+  );
+
+  let lastSeance = null;
+  let n = 0;
+  const lignes = series.map((s) => {
+    let sep = '';
+    if (lastSeance !== null && lastSeance !== s.seance_id) {
+      sep = '<div class="border-t border-fonte-border my-1.5"></div>';
+      n = 0;
+    }
+    lastSeance = s.seance_id;
+    n += 1;
+    const tag = s.type === 'echec' ? ' <span class="text-fonte-amber">(échec)</span>' : '';
+    return `${sep}<div class="flex justify-between gap-3"><span>Série ${n}${tag} — ${fmt(s.poids_kg)} kg × ${s.reps} reps</span><span class="text-fonte-text">${fmt(s.poids_kg * s.reps)} kg</span></div>`;
+  }).join('');
+
+  detailEl.innerHTML = `
+    <div class="border border-fonte-border bg-fonte-panel2 p-3">
+      <p class="text-fonte-text mb-2">${formatDayTitle(new Date(y, m - 1, d))}</p>
+      ${lignes}
+      <div class="border-t border-fonte-border mt-2 pt-2 flex justify-between gap-3">
+        <span>Volume du jour (Σ poids × reps)</span>
+        <span class="text-fonte-amber">${fmt(entry.volume)} kg</span>
+      </div>
+      <div class="flex justify-between gap-3 mt-0.5">
+        <span>Charge max</span>
+        <span class="text-fonte-text">${fmt(entry.max)} kg</span>
+      </div>
+    </div>
+  `;
 }
 
 async function drawAutreChart(canvas, item, key) {
